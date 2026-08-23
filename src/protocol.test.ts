@@ -1,91 +1,95 @@
-import {describe, expect, it} from 'vitest'
-import {finalizeEvent} from 'nostr-tools'
 import {hexToBytes} from '@noble/hashes/utils.js'
+import {finalizeEvent} from 'nostr-tools'
+import {describe, expect, it} from 'vitest'
 import {
   REQUEST_KIND,
   REQUEST_PREFIX,
   bondSetHashOf,
+  contractIdOf,
   createIdentity,
   decodeRequest,
+  isCommitmentIntent,
   outputHashOf,
   randomId,
   randomSecretHex,
-  signOutcome,
   signRequest,
-  verifyOutcome,
-  type ReceiverLockedIntent
+  type CommitmentIntent,
+  type DirectPaymentIntent,
+  type LegacyReceiverLockedIntent
 } from './protocol'
 
-const intent = (): ReceiverLockedIntent => {
-  const receiverSecret = randomSecretHex()
+const mint = {host: 'mint.test', withdrawLink: 'https://mint.test/w', mintPubkey: `02${'11'.repeat(32)}`}
+
+const directIntent = (): DirectPaymentIntent => ({
+  v: 2,
+  contractId: randomId(),
+  revision: 1,
+  purpose: 'payment',
+  receiverRole: 'recipient',
+  amount: '21',
+  currency: 'sat',
+  mint,
+  outputHash: outputHashOf(randomSecretHex()),
+  expires: Math.floor(Date.now() / 1000) + 300,
+  memo: 'service payment'
+})
+
+const commitmentIntent = (): {intent: CommitmentIntent; arbiter: ReturnType<typeof createIdentity>} => {
+  const partyA = createIdentity()
+  const partyB = createIdentity()
+  const arbiter = createIdentity()
   return {
-    v: 1,
-    rideId: randomId(),
-    fareVersion: 1,
-    purpose: 'fare',
-    role: 'driver',
-    amount: '21',
-    currency: 'sat',
-    mint: {
-      host: 'mint.test',
-      withdrawLink: 'https://mint.test/w',
-      mintPubkey: `02${'11'.repeat(32)}`
-    },
-    outputHash: outputHashOf(receiverSecret),
-    expires: Math.floor(Date.now() / 1000) + 300,
-    memo: 'final fare'
+    arbiter,
+    intent: {
+      v: 2,
+      contractId: randomId(),
+      revision: 1,
+      purpose: 'commitment',
+      receiverRole: 'arbiter',
+      payerRole: 'party_a',
+      offerId: '44'.repeat(32),
+      participants: {party_a: partyA.pubkey, party_b: partyB.pubkey, arbiter: arbiter.pubkey},
+      amount: '13',
+      currency: 'sat',
+      mint,
+      outputHash: outputHashOf(randomSecretHex()),
+      expires: Math.floor(Date.now() / 1000) + 300,
+      memo: 'Party A commitment'
+    }
   }
 }
 
-describe('receiver-locked requests', () => {
-  it('round-trips a signed request and binds the readable tags to its body', () => {
+describe('receiver-locked request v2', () => {
+  it('round-trips a generic direct payment and binds readable tags to its body', () => {
     const signer = createIdentity()
-    const request = signRequest(intent(), signer.secretHex)
+    const request = signRequest(directIntent(), signer.secretHex)
     const decoded = decodeRequest(request.encoded)
     expect(decoded.intent).toEqual(request.intent)
     expect(decoded.event.pubkey).toBe(signer.pubkey)
+    expect(contractIdOf(decoded.intent)).toBe(contractIdOf(request.intent))
   })
 
   it('refuses a changed body even when the original Nostr event was valid', () => {
     const signer = createIdentity()
-    const request = signRequest(intent(), signer.secretHex)
-    const payload = request.encoded.slice('lnurlcashlock1'.length)
+    const request = signRequest(directIntent(), signer.secretHex)
+    const payload = request.encoded.slice(REQUEST_PREFIX.length)
     const padded = payload.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - payload.length % 4) % 4)
     const event = JSON.parse(Buffer.from(padded, 'base64').toString('utf8')) as {content: string}
     event.content = event.content.replace('"amount":"21"', '"amount":"210"')
-    const tampered = `lnurlcashlock1${Buffer.from(JSON.stringify(event)).toString('base64url')}`
+    const tampered = `${REQUEST_PREFIX}${Buffer.from(JSON.stringify(event)).toString('base64url')}`
     expect(() => decodeRequest(tampered)).toThrow('signature')
   })
 
-  it('lets a receiver inspect an expired request without making it payable again', () => {
+  it('refuses exact-tag smuggling', () => {
     const signer = createIdentity()
-    const expired = intent()
-    expired.expires = 2
-    const event = finalizeEvent({
-      kind: REQUEST_KIND,
-      created_at: 1,
-      tags: [
-        ['d', expired.rideId], ['t', 'lnurlcash-contract-payment'], ['purpose', expired.purpose],
-        ['amount', expired.amount, expired.currency], ['mint', expired.mint.host], ['h', expired.outputHash],
-        ['fare_version', String(expired.fareVersion)]
-      ],
-      content: JSON.stringify(expired)
-    }, hexToBytes(signer.secretHex))
-    const encoded = REQUEST_PREFIX + Buffer.from(JSON.stringify(event)).toString('base64url')
-    expect(() => decodeRequest(encoded)).toThrow('expired')
-    expect(decodeRequest(encoded, 0).intent.expires).toBe(2)
-  })
-
-  it('refuses signed tag smuggling instead of letting clients parse different contracts', () => {
-    const signer = createIdentity()
-    const body = intent()
+    const body = directIntent()
     const event = finalizeEvent({
       kind: REQUEST_KIND,
       created_at: Math.floor(Date.now() / 1000),
       tags: [
-        ['d', body.rideId], ['t', 'lnurlcash-contract-payment'], ['purpose', body.purpose],
+        ['d', body.contractId], ['t', 'lnurlcash-contract-payment'], ['purpose', body.purpose],
         ['amount', body.amount, body.currency], ['mint', body.mint.host], ['h', body.outputHash],
-        ['fare_version', String(body.fareVersion)], ['beneficiary', 'attacker']
+        ['revision', '1'], ['beneficiary', 'attacker']
       ],
       content: JSON.stringify(body)
     }, hexToBytes(signer.secretHex))
@@ -93,60 +97,52 @@ describe('receiver-locked requests', () => {
     expect(() => decodeRequest(encoded)).toThrow('tags')
   })
 
-  it('refuses a signed request with an excessive replay window', () => {
-    const signer = createIdentity()
-    const longLived = intent()
-    longLived.expires = Math.floor(Date.now() / 1000) + 60 * 60
-    expect(() => decodeRequest(signRequest(longLived, signer.secretHex).encoded)).toThrow('15 minute')
+  it('refuses a request with an excessive replay window', () => {
+    const body = directIntent()
+    body.expires = Math.floor(Date.now() / 1000) + 60 * 60
+    expect(() => decodeRequest(signRequest(body, createIdentity().secretHex).encoded)).toThrow('15 minute')
   })
 
-  it('binds every bond to distinct rider, driver and referee keys', () => {
-    const referee = createIdentity()
-    const rider = createIdentity()
-    const driver = createIdentity()
+  it('binds a commitment to neutral party roles, its exact offer and the named arbiter', () => {
+    const {intent, arbiter} = commitmentIntent()
     const attacker = createIdentity()
-    const bond = intent()
-    bond.purpose = 'rider_bond'
-    bond.role = 'referee'
-    expect(() => signRequest(bond, referee.secretHex)).toThrow('participant keys')
-    bond.participants = {rider: rider.pubkey, driver: driver.pubkey, referee: referee.pubkey}
-    expect(() => signRequest(bond, attacker.secretHex)).toThrow('named referee')
-    expect(decodeRequest(signRequest(bond, referee.secretHex).encoded).intent.participants).toEqual(bond.participants)
+    expect(() => signRequest(intent, attacker.secretHex)).toThrow('named arbiter')
+    const decoded = decodeRequest(signRequest(intent, arbiter.secretHex).encoded)
+    expect(isCommitmentIntent(decoded.intent)).toBe(true)
+    expect(decoded.intent).toMatchObject({payerRole: 'party_a', offerId: '44'.repeat(32), receiverRole: 'arbiter'})
+    expect(decoded.event.tags.some(tag => tag.join(':').includes('rider'))).toBe(false)
+    expect(decoded.event.tags.some(tag => tag.join(':').includes('driver'))).toBe(false)
+  })
+
+  it('requires a 128-bit contract id and rejects unknown request fields', () => {
+    const signer = createIdentity()
+    expect(() => signRequest({...directIntent(), contractId: '01'.repeat(8)}, signer.secretHex)).toThrow('16 random bytes')
+    expect(() => signRequest({...directIntent(), hiddenRule: 'attacker'} as DirectPaymentIntent, signer.secretHex)).toThrow('unknown fields')
   })
 })
 
-describe('outcome authority', () => {
-  it('accepts self-cancellation only from the cancelling party', () => {
-    const rider = createIdentity()
-    const driver = createIdentity()
-    const identities = {rider: rider.pubkey, driver: driver.pubkey}
-    const contractId = '01'.repeat(16)
-    const bondSetHash = bondSetHashOf(['11'.repeat(32), '22'.repeat(32)])
-    const honest = signOutcome(contractId, bondSetHash, 'rider_cancel', rider.secretHex)
-    const framed = signOutcome(contractId, bondSetHash, 'rider_cancel', driver.secretHex)
-    expect(verifyOutcome(honest, identities)).toBe(true)
-    expect(verifyOutcome(framed, identities)).toBe(false)
+describe('wire compatibility and input binding', () => {
+  it('still decodes an already-issued v1 direct-payment request', () => {
+    const signer = createIdentity()
+    const legacy: LegacyReceiverLockedIntent = {
+      v: 1,
+      rideId: randomId(),
+      fareVersion: 1,
+      purpose: 'fare',
+      role: 'driver',
+      amount: '21',
+      currency: 'sat',
+      mint,
+      outputHash: outputHashOf(randomSecretHex()),
+      expires: Math.floor(Date.now() / 1000) + 300,
+      memo: 'legacy payment'
+    }
+    expect(decodeRequest(signRequest(legacy, signer.secretHex).encoded).intent).toEqual(legacy)
   })
 
-  it('accepts completion attestations only from the two contract parties', () => {
-    const rider = createIdentity()
-    const driver = createIdentity()
-    const stranger = createIdentity()
-    const identities = {rider: rider.pubkey, driver: driver.pubkey}
-    const contractId = '01'.repeat(16)
-    const bondSetHash = bondSetHashOf(['11'.repeat(32), '22'.repeat(32)])
-    expect(verifyOutcome(signOutcome(contractId, bondSetHash, 'complete', rider.secretHex), identities)).toBe(true)
-    expect(verifyOutcome(signOutcome(contractId, bondSetHash, 'complete', driver.secretHex), identities)).toBe(true)
-    expect(verifyOutcome(signOutcome(contractId, bondSetHash, 'complete', stranger.secretHex), identities)).toBe(false)
-  })
-
-  it('does not replay a valid outcome over a different pair of bond requests', () => {
-    const rider = createIdentity()
-    const driver = createIdentity()
+  it('hashes exactly two distinct signed request ids into one order-independent set', () => {
     const first = bondSetHashOf(['11'.repeat(32), '22'.repeat(32)])
-    const second = bondSetHashOf(['11'.repeat(32), '33'.repeat(32)])
-    const signed = signOutcome('01'.repeat(16), first, 'rider_cancel', rider.secretHex)
-    expect(verifyOutcome(signed, {rider: rider.pubkey, driver: driver.pubkey}, first)).toBe(true)
-    expect(verifyOutcome(signed, {rider: rider.pubkey, driver: driver.pubkey}, second)).toBe(false)
+    expect(first).toBe(bondSetHashOf(['22'.repeat(32), '11'.repeat(32)]))
+    expect(() => bondSetHashOf(['11'.repeat(32), '11'.repeat(32)])).toThrow('different')
   })
 })

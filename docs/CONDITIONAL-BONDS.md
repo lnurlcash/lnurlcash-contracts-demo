@@ -4,60 +4,75 @@
 
 Receiver-locked LNURLcash solves payment delivery. It does not solve conditional escrow.
 
-A plain LUD-25 output is keyed by `sha256(k1)`. Anyone holding `k1` can spend it and nobody else can. There is no second branch saying “the owner may refund after completion”, no signature threshold and no timeout. Giving `k1` to the counterparty transfers the bond immediately. Giving it to a referee creates custody.
+A plain LUD-25 output is keyed by `sha256(k1)`. Anyone holding `k1` can spend it and nobody else can. There is no alternative signature branch, threshold or timeout refund. Giving `k1` to a counterparty transfers the bond immediately. Giving it to an arbiter creates custody.
 
-## A workable contract
+## Generic bilateral policy
 
-The application state should distinguish outcomes that are cryptographically attributable from outcomes that need judgement. A ride is the worked example here; the same pattern covers deliveries, bookings and contracted work:
+The v2 lab fixes one reusable policy for Party A and Party B:
 
-| Outcome | Required authority | Rider bond | Driver bond |
+| Outcome | Required authority | Party A bond | Party B bond |
 | --- | --- | --- | --- |
-| Both sign complete | rider + driver | refund rider | refund driver |
-| Rider signs self-cancel | rider | forfeit to driver | refund driver |
-| Driver signs self-cancel | driver | refund rider | forfeit to rider |
-| Both sign mutual cancel | rider + driver | refund rider | refund driver |
-| Alleged no-show | arbiter after evidence | policy decision | policy decision |
-| Contract setup expires before both fund | timeout | refund funded bond | refund funded bond |
+| Complete | A + B | refund A | refund B |
+| Mutual cancel | A + B | refund A | refund B |
+| A self-cancels | A | forfeit to B | refund B |
+| B self-cancels | B | refund A | forfeit to A |
+| Dispute | either party | freeze | freeze |
+| Arbiter awards A | arbiter after challenge | pay A | pay A |
+| Arbiter awards B | arbiter after challenge | pay B | pay B |
+| Arbiter refunds both | arbiter after challenge | refund A | refund B |
+| Setup never activates | setup timeout | refund funded A | refund funded B |
+| No outcome by settlement expiry | contract timeout | refund A | refund B |
 
-Silence must not be treated as a confession. Otherwise a relay outage, flat battery or crashed app becomes a financial attack.
+Silence never identifies a guilty party. It can eventually produce a no-fault refund only when nobody raised a dispute or supplied executable signed authority.
 
-## Route available now: explicit referee
+Ride, delivery, booking and contracted work change labels and commercial evidence, not this settlement table. A materially different rule requires a new policy id and new acceptance.
 
-The demo's referee controls two LNURLcash notes during the ride. It applies the table above, but the present single-browser inspector also generates the payout secret and therefore knows it until the beneficiary rotates. A real remote implementation must redirect into a beneficiary-generated output hash. The referee can still steal held bonds. A federation can reduce single-operator risk but remains a custody system.
+## Route implemented now: explicit arbiter
 
-DonkeyRide's existing LND HODL provider has the same essential boundary. The operator holds the preimage, may settle the held invoice into its own node, and must then compensate the wronged party. Automatic invoice timeout limits the hold, but does not make outcome selection or the compensation leg trustless.
+The arbiter receives two notes under secrets it controls. That lets the honest client enforce the table and also lets a malicious arbiter steal.
 
-## Route worth discussing with LNURLcash developers
+Participants now generate two payout secrets on their own devices and countersign only their hashes. Two are required because one beneficiary may receive both source bonds and a mint cannot safely be assumed to accept two independent notes at one output hash. During settlement the arbiter redirects each input to its exact beneficiary/source hash and never receives the secret.
 
-Add an optional mint-enforced conditional output, advertised before use and rejected by mints that do not understand it. The useful precedent is Cashu's well-known spending-condition secret and P2PK locktime/refund rules, not an invented claim that a hash alone is a smart contract.
+That removes payout-secret custody after a correct redirect. It does not remove custody of the held inputs before redirect.
 
-A ride bond needs, at minimum:
+DonkeyRide's HODL-invoice provider has the same essential boundary: an operator controls settlement and must compensate the selected party. The generic lab makes participant authority and payout destinations portable and auditable, but it does not make the operator trustless.
 
-- signatures from named Nostr/secp256k1 keys;
-- a threshold or explicit alternative branches;
-- signatures over both inputs and chosen outputs, so an authorised party cannot redirect a valid settlement;
-- an absolute refund time;
-- fail-closed capability negotiation;
-- a canonical contract id binding ride id, parties, amounts, mint, expiry and payout policy;
-- atomic settlement and replay-safe mutation records.
+## Route worth standardising: mint-enforced conditions
 
-One possible policy shape is:
+Removing arbiter custody requires an optional mint capability with fail-closed negotiation. Useful precedent exists in Cashu's spending-condition and P2PK locktime/refund work, but this lab does not claim those formats apply directly to LUD-25.
+
+A bilateral bond condition needs at least:
+
+- named secp256k1/Nostr keys;
+- explicit threshold and alternative branches;
+- signatures committing to both inputs and chosen outputs;
+- an absolute setup refund and final timeout;
+- unique per-input receiver hashes;
+- atomic settlement or a specified partial-failure protocol;
+- replay-safe idempotence for the same input/output mutation;
+- capability and policy-version negotiation;
+- lost-key and federation behaviour;
+- a conformance suite covering clock edges and conflicting branches.
+
+Illustrative policy shape only:
 
 ```json
 {
-  "kind": "P2PK",
-  "contract": "<ride-contract-id>",
-  "before": {
-    "complete": ["rider", "driver"],
-    "self_cancel": ["canceller", "arbiter"],
-    "dispute": ["party", "arbiter"]
+  "policy": "bilateral-arbiter-v1",
+  "contract": "<canonical-offer-id>",
+  "inputs": ["party_a_bond", "party_b_bond"],
+  "branches": {
+    "complete": ["party_a", "party_b"],
+    "self_cancel_a": ["party_a"],
+    "self_cancel_b": ["party_b"],
+    "decision": ["arbiter", "challenge_elapsed"]
   },
   "after": {
     "time": 1780000000,
-    "refund": "original-owner"
+    "resolution": "refund_original_owners"
   },
   "sigflag": "inputs_and_outputs"
 }
 ```
 
-That is illustrative, not a proposed wire format. The hard work is branch semantics, signature coverage, clock behaviour, lost-key recovery, federation and upgrade safety. It belongs in a separate draft and conformance suite before anybody puts meaningful money into it.
+That is not a proposed wire format. The hard work is consensus over branch semantics, output commitment, federation, clocks, recovery and upgrade safety.

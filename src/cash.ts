@@ -10,16 +10,26 @@ import {
   withNewK1,
   type LnurlcashOptions
 } from 'lnurlcash-kit'
-import type {ReceiverLockedIntent, SignedRequest} from './protocol'
+import {contractIdOf, type MintTrust, type ReceiverLockedIntent, type SignedRequest} from './protocol'
 
 export type FundingReceipt = {
   requestEventId: string
-  rideId: string
+  contractId: string
+  rideId?: string
   amountMsat: number
   mintHost: string
   outputHash: string
   signature?: string
   outcome: 'confirmed' | 'receiver_must_probe'
+  createdAt: number
+}
+
+export type SettlementReceipt = {
+  amountMsat: number
+  mintHost: string
+  outputHash: string
+  signature?: string
+  outcome: 'confirmed' | 'beneficiary_must_probe'
   createdAt: number
 }
 
@@ -76,7 +86,7 @@ export const fundReceiverLockedRequest = async (
     const result = await rotateNoteWithHash(info.callback, k1, request.intent.outputHash, options)
     return {
       requestEventId: request.event.id,
-      rideId: request.intent.rideId,
+      contractId: contractIdOf(request.intent),
       amountMsat: required,
       mintHost: request.intent.mint.host,
       outputHash: request.intent.outputHash,
@@ -92,7 +102,7 @@ export const fundReceiverLockedRequest = async (
     // different output hash: the receiver checks the mint independently.
     return {
       requestEventId: request.event.id,
-      rideId: request.intent.rideId,
+      contractId: contractIdOf(request.intent),
       amountMsat: required,
       mintHost: request.intent.mint.host,
       outputHash: request.intent.outputHash,
@@ -113,7 +123,7 @@ export const receiveLockedPayment = async (
   if (receipt && (
     receipt.requestEventId !== request.event.id ||
     receipt.outputHash !== request.intent.outputHash ||
-    receipt.rideId !== request.intent.rideId ||
+    (receipt.contractId ?? receipt.rideId) !== contractIdOf(request.intent) ||
     receipt.amountMsat !== expected ||
     receipt.mintHost !== request.intent.mint.host
   )) {
@@ -140,35 +150,64 @@ export const receiveLockedPayment = async (
   }
 }
 
-export const redirectHeldNote = async (
+export const redirectHeldNoteToHash = async (
   held: ReceivedNote,
   receiverSecretHex: string,
-  beneficiarySecretHex: string,
+  beneficiaryOutputHash: string,
   options: LnurlcashOptions = {}
-): Promise<ReceivedNote> => {
+): Promise<SettlementReceipt> => {
   const heldHost = new URL(held.noteUrl).host
   assertCallbackAtMint(held.callback, heldHost)
-  const outputHash = hashK1(beneficiarySecretHex)
-  let signature: string | undefined
+  if (!/^[0-9a-f]{64}$/u.test(beneficiaryOutputHash)) throw new Error('The beneficiary output hash is malformed.')
   try {
-    signature = (await rotateNoteWithHash(held.callback, receiverSecretHex, outputHash, options)).signature
-  } catch {
-    // Probe below. An ambiguous rotate may already have produced the output.
+    const result = await rotateNoteWithHash(held.callback, receiverSecretHex, beneficiaryOutputHash, options)
+    return {
+      amountMsat: held.amountMsat,
+      mintHost: heldHost,
+      outputHash: beneficiaryOutputHash,
+      ...(result.signature ? {signature: result.signature} : {}),
+      outcome: 'confirmed',
+      createdAt: Date.now()
+    }
+  } catch (error) {
+    if (error instanceof RequestRefusedError) throw error
+    return {
+      amountMsat: held.amountMsat,
+      mintHost: heldHost,
+      outputHash: beneficiaryOutputHash,
+      outcome: 'beneficiary_must_probe',
+      createdAt: Date.now()
+    }
   }
-  const nextUrl = noteUrlWithSignature(new URL(held.noteUrl).origin + new URL(held.noteUrl).pathname, beneficiarySecretHex, held.amountMsat, signature)
+}
+
+export const receiveRedirectedPayout = async (
+  mint: MintTrust,
+  amountMsat: number,
+  beneficiarySecretHex: string,
+  receipt?: SettlementReceipt,
+  options: LnurlcashOptions = {}
+): Promise<ReceivedNote> => {
+  const outputHash = hashK1(beneficiarySecretHex)
+  if (receipt && (
+    receipt.outputHash !== outputHash ||
+    receipt.amountMsat !== amountMsat ||
+    receipt.mintHost !== mint.host
+  )) throw new Error('The settlement receipt belongs to another payout target.')
+  const nextUrl = noteUrlWithSignature(mint.withdrawLink, beneficiarySecretHex, amountMsat, receipt?.signature)
   const info = await fetchNoteInfo(nextUrl, options)
-  assertCallbackAtMint(info.callback, heldHost)
-  if (info.maxWithdrawable !== held.amountMsat) throw new Error('The settlement output has the wrong value.')
-  if (held.mintPubkey && info.mintPubkey !== held.mintPubkey) throw new Error('The settlement output changed mint signing key.')
-  const signatureVerified = signature && held.mintPubkey
-    ? verifyNoteSignature(beneficiarySecretHex, held.amountMsat, signature, held.mintPubkey)
+  assertCallbackAtMint(info.callback, mint.host)
+  if (info.maxWithdrawable !== amountMsat) throw new Error('The settlement output has the wrong value.')
+  if (mint.mintPubkey && info.mintPubkey !== mint.mintPubkey) throw new Error('The settlement output changed mint signing key.')
+  const signatureVerified = receipt?.signature && mint.mintPubkey
+    ? verifyNoteSignature(beneficiarySecretHex, amountMsat, receipt.signature, mint.mintPubkey)
     : null
   if (signatureVerified === false) throw new Error('The mint signature on the settlement output does not verify.')
   return {
     noteUrl: nextUrl,
-    amountMsat: held.amountMsat,
+    amountMsat,
     callback: info.callback,
     signatureVerified,
-    ...(held.mintPubkey ? {mintPubkey: held.mintPubkey} : {})
+    ...(mint.mintPubkey ? {mintPubkey: mint.mintPubkey} : {})
   }
 }

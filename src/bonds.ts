@@ -1,143 +1,253 @@
-import type {ReceivedNote} from './cash'
 import {noteK1} from 'lnurlcash-kit'
-import {bondSetHashOf, decodeRequest, outputHashOf, randomSecretHex, type ContractParticipants, type RideOutcome} from './protocol'
-import type {ContractOutcome, DemoStore, StoredPayout, StoredRequest} from './store'
+import type {ReceivedNote, SettlementReceipt} from './cash'
+import {
+  assertArbiterDecision,
+  assertFundingAcknowledgement,
+  assertOutcomeStatement,
+  assertPayoutAcknowledgement,
+  decisionExecutableAt,
+  decodeContractMessage,
+  type ContractPacket,
+  type SignedArbiterDecision,
+  type SignedFundingAcknowledgement,
+  type SignedOutcomeStatement,
+  type SignedPayoutAcknowledgement,
+  type SignedSettlementNotice
+} from './coordination'
+import {PARTY_ROLES, type PartyRole} from './contract-types'
+import {decodeRequest, isCommitmentIntent, outputHashOf} from './protocol'
+import type {DemoStore, SettlementResolution, StoredRequest, StoredSettlement} from './store'
 
-export type BondEntry = [requestId: string, record: StoredRequest]
+export type CommitmentEntry = [requestId: string, record: StoredRequest]
 
-export type BondSet = {
+export type CommitmentSet = {
+  offerId: string
   contractId: string
-  entries: [BondEntry, BondEntry]
-  bondSetHash: string
-  refereePubkey: string
-  participants: ContractParticipants
+  packet: ContractPacket
+  entries: Record<PartyRole, CommitmentEntry>
   setupExpires: number
 }
 
-const comparableMint = (record: StoredRequest): string => JSON.stringify(record.intent.mint)
+export type ActivationState = {
+  held: Record<PartyRole, boolean>
+  acknowledged: Record<PartyRole, boolean>
+  active: boolean
+}
 
-export const bondSetForContract = (store: DemoStore, contractId: string): BondSet => {
-  const entries = Object.entries(store.requests)
-    .filter(([, record]) => record.intent.rideId === contractId && ['rider_bond', 'driver_bond'].includes(record.intent.purpose))
-  if (entries.length !== 2) throw new Error('A contract must have exactly one rider bond and one driver bond.')
-  const rider = entries.filter(([, record]) => record.intent.purpose === 'rider_bond')
-  const driver = entries.filter(([, record]) => record.intent.purpose === 'driver_bond')
-  if (rider.length !== 1 || driver.length !== 1) throw new Error('Duplicate or missing bond roles make this contract unsafe to resolve.')
-  const ordered = [rider[0]!, driver[0]!] as [BondEntry, BondEntry]
-  const decoded = ordered.map(([requestId, record]) => {
-    const signed = decodeRequest(record.encoded, 0)
-    if (signed.event.id !== requestId || JSON.stringify(signed.intent) !== JSON.stringify(record.intent)) {
-      throw new Error('Stored bond data disagrees with its signed request.')
-    }
-    if (outputHashOf(record.receiverSecretHex) !== signed.intent.outputHash) throw new Error('A stored receiver secret does not match its signed output hash.')
-    if (record.received) {
-      if (noteK1(record.received.noteUrl) !== record.receiverSecretHex.toLowerCase()) throw new Error('A held note does not match its stored receiver secret.')
-      if (record.received.amountMsat !== Number(signed.intent.amount) * 1000) throw new Error('A held note does not match its signed amount.')
-      if (new URL(record.received.noteUrl).host.toLowerCase() !== signed.intent.mint.host) throw new Error('A held note belongs to another mint.')
-      if (new URL(record.received.callback).host.toLowerCase() !== signed.intent.mint.host) throw new Error('A held note callback belongs to another mint.')
-      if (record.received.mintPubkey && record.received.mintPubkey !== signed.intent.mint.mintPubkey) throw new Error('A held note carries another mint signing key.')
-    }
-    if (signed.intent.role !== 'referee') throw new Error('A commitment bond must be receiver-locked to the referee.')
-    return signed
-  })
-  if (decoded[0]!.event.pubkey !== decoded[1]!.event.pubkey) throw new Error('The two bonds name different referees.')
-  const participants = decoded[0]!.intent.participants
-  if (!participants || JSON.stringify(participants) !== JSON.stringify(decoded[1]!.intent.participants)) throw new Error('The two bonds name different participant keys.')
-  if (comparableMint(ordered[0][1]) !== comparableMint(ordered[1][1])) throw new Error('The two bonds name different mint trust roots.')
-  if (ordered[0][1].intent.expires !== ordered[1][1].intent.expires) throw new Error('The two bonds have different setup deadlines.')
+export type EvidenceState =
+  | {state: 'pending'; reason: string}
+  | {state: 'disputed'; challengeEnds?: number; decision?: SignedArbiterDecision}
+  | {state: 'executable'; resolution: Exclude<SettlementResolution, 'setup_abort'>; authorityIds: string[]}
+
+const receivedMatches = (record: StoredRequest): void => {
+  const signed = decodeRequest(record.encoded, 0)
+  if (!isCommitmentIntent(signed.intent)) throw new Error('A stored commitment is not a generic v2 request.')
+  if (outputHashOf(record.receiverSecretHex) !== signed.intent.outputHash) throw new Error('A stored arbiter secret does not match its signed output hash.')
+  if (!record.received) return
+  if (noteK1(record.received.noteUrl) !== record.receiverSecretHex.toLowerCase()) throw new Error('A held note does not match its stored arbiter secret.')
+  if (record.received.amountMsat !== Number(signed.intent.amount) * 1000) throw new Error('A held note does not match its signed amount.')
+  if (new URL(record.received.noteUrl).host.toLowerCase() !== signed.intent.mint.host) throw new Error('A held note belongs to another mint.')
+  if (new URL(record.received.callback).host.toLowerCase() !== signed.intent.mint.host) throw new Error('A held note callback belongs to another mint.')
+  if (record.received.mintPubkey && record.received.mintPubkey !== signed.intent.mint.mintPubkey) throw new Error('A held note carries another mint signing key.')
+}
+
+export const commitmentSetForPacket = (store: DemoStore, packet: ContractPacket): CommitmentSet => {
+  const entries = {} as Record<PartyRole, CommitmentEntry>
+  for (const role of PARTY_ROLES) {
+    const expected = packet.bondRequests[role]
+    const record = store.requests[expected.event.id]
+    if (!record) throw new Error(`The arbiter browser has no stored ${role.replace('_', ' ')} bond secret.`)
+    const decoded = decodeRequest(record.encoded, 0)
+    if (
+      decoded.event.id !== expected.event.id ||
+      decoded.encoded !== expected.encoded ||
+      JSON.stringify(decoded.intent) !== JSON.stringify(expected.intent) ||
+      JSON.stringify(record.intent) !== JSON.stringify(expected.intent)
+    ) throw new Error('Stored commitment data disagrees with the signed contract packet.')
+    receivedMatches(record)
+    entries[role] = [expected.event.id, record]
+  }
   return {
-    contractId,
-    entries: ordered,
-    bondSetHash: bondSetHashOf(ordered.map(([id]) => id)),
-    refereePubkey: decoded[0]!.event.pubkey,
-    participants,
-    setupExpires: ordered[0][1].intent.expires
+    offerId: packet.offer.event.id,
+    contractId: packet.offer.terms.contractId,
+    packet,
+    entries,
+    setupExpires: packet.offer.terms.setupExpires
   }
 }
 
-const allPayouts = (store: DemoStore): StoredPayout[] => [...store.payouts.rider, ...store.payouts.driver]
+const fundingAckFor = (store: DemoStore, packet: ContractPacket, role: PartyRole): SignedFundingAcknowledgement | undefined => {
+  const encoded = store.contracts[packet.offer.event.id]?.fundingAcks[role]
+  if (!encoded) return undefined
+  const decoded = decodeContractMessage(encoded, 0)
+  if (decoded.type !== 'funding_ack') throw new Error('Stored funding authority is not a funding acknowledgement.')
+  assertFundingAcknowledgement(decoded, packet)
+  if (decoded.role !== role) throw new Error('A funding acknowledgement is stored under the wrong role.')
+  return decoded
+}
 
-const payoutFor = (store: DemoStore, requestId: string): StoredPayout | undefined => {
-  const matches = allPayouts(store).filter(payout => payout.bondRequestId === requestId)
-  if (matches.length > 1) throw new Error('Duplicate payout journals make this contract unsafe to resolve.')
-  const payout = matches[0]
-  if (payout?.state === 'settled' && !payout.note) throw new Error('A settled payout is missing its bearer output.')
-  if (payout?.note) {
-    const request = store.requests[requestId]
-    if (!request) throw new Error('A payout journal has lost its signed bond request.')
-    if (noteK1(payout.note.noteUrl) !== payout.secretHex.toLowerCase()) throw new Error('A payout note does not match its staged secret.')
-    if (payout.note.amountMsat !== Number(request.intent.amount) * 1000) throw new Error('A payout note has the wrong value.')
-    if (new URL(payout.note.noteUrl).host.toLowerCase() !== request.intent.mint.host) throw new Error('A payout note belongs to another mint.')
+export const contractActivationState = (store: DemoStore, packet: ContractPacket): ActivationState => {
+  const set = commitmentSetForPacket(store, packet)
+  const held = {
+    party_a: Boolean(set.entries.party_a[1].received || settlementFor(store, set.entries.party_a[0])),
+    party_b: Boolean(set.entries.party_b[1].received || settlementFor(store, set.entries.party_b[0]))
   }
-  return payout
+  const acknowledged = {
+    party_a: Boolean(fundingAckFor(store, packet, 'party_a')),
+    party_b: Boolean(fundingAckFor(store, packet, 'party_b'))
+  }
+  return {held, acknowledged, active: PARTY_ROLES.every(role => held[role] && acknowledged[role])}
 }
 
-export const contractFundingState = (store: DemoStore, contractId: string): {verified: number; complete: boolean; expires: number} => {
-  const bondSet = bondSetForContract(store, contractId)
-  const verified = bondSet.entries.filter(([requestId, record]) => record.received || payoutFor(store, requestId)).length
-  return {verified, complete: verified === 2, expires: bondSet.setupExpires}
+const importedOutcomes = (encoded: string[], packet: ContractPacket): Array<{statement: SignedOutcomeStatement; role: PartyRole}> => {
+  const seen = new Set<string>()
+  return encoded.map(value => {
+    const message = decodeContractMessage(value, 0)
+    if (message.type !== 'outcome') throw new Error('Stored outcome authority contains another message type.')
+    if (seen.has(message.event.id)) throw new Error('The same outcome statement was imported twice.')
+    seen.add(message.event.id)
+    return {statement: message, role: assertOutcomeStatement(message, packet)}
+  })
 }
 
-const beneficiaryFor = (owner: 'rider' | 'driver', outcome: ContractOutcome): 'rider' | 'driver' => {
-  if (outcome === 'complete' || outcome === 'setup_abort') return owner
-  return outcome === 'rider_cancel' ? 'driver' : 'rider'
+export const evaluateResolutionEvidence = (
+  packet: ContractPacket,
+  outcomeInputs: string[],
+  decisionInput?: string,
+  nowSeconds = Math.floor(Date.now() / 1000)
+): EvidenceState => {
+  const statements = importedOutcomes(outcomeInputs, packet)
+  const selfCancels = statements.filter(({statement}) => ['party_a_cancel', 'party_b_cancel'].includes(statement.outcome))
+  if (new Set(selfCancels.map(({statement}) => statement.outcome)).size > 1) return {state: 'disputed'}
+  if (selfCancels.length) {
+    const selected = selfCancels[0]!.statement
+    return {state: 'executable', resolution: selected.outcome as 'party_a_cancel' | 'party_b_cancel', authorityIds: [selected.event.id]}
+  }
+
+  for (const outcome of ['complete', 'mutual_cancel'] as const) {
+    const matching = statements.filter(({statement}) => statement.outcome === outcome)
+    const roles = new Set(matching.map(({role}) => role))
+    if (roles.size === 2) return {state: 'executable', resolution: outcome, authorityIds: matching.map(({statement}) => statement.event.id)}
+  }
+
+  const disputed = statements.some(({statement}) => statement.outcome === 'dispute')
+  if (decisionInput) {
+    const message = decodeContractMessage(decisionInput, 0)
+    if (message.type !== 'arbiter_decision') throw new Error('Stored decision authority is not an arbiter decision.')
+    assertArbiterDecision(message, packet)
+    if (!disputed) throw new Error('An arbiter decision cannot create a dispute that neither party raised.')
+    const challengeEnds = decisionExecutableAt(message, packet.offer)
+    if (nowSeconds < challengeEnds) return {state: 'disputed', challengeEnds, decision: message}
+    return {state: 'executable', resolution: message.resolution, authorityIds: [message.event.id, ...statements.filter(({statement}) => statement.outcome === 'dispute').map(({statement}) => statement.event.id)]}
+  }
+  if (disputed) return {state: 'disputed'}
+
+  const unilateral = statements.find(({statement}) => ['complete', 'mutual_cancel'].includes(statement.outcome))
+  return {state: 'pending', reason: unilateral ? 'The other party has not signed the matching outcome.' : 'No executable outcome authority has been imported.'}
+}
+
+const allSettlementsFor = (store: DemoStore, requestId: string): StoredSettlement[] => store.settlements.filter(item => item.bondRequestId === requestId)
+
+const settlementFor = (store: DemoStore, requestId: string): StoredSettlement | undefined => {
+  const matches = allSettlementsFor(store, requestId)
+  if (matches.length > 1) throw new Error('Duplicate settlement journals make this contract unsafe to resolve.')
+  return matches[0]
+}
+
+export const beneficiaryFor = (owner: PartyRole, resolution: SettlementResolution): PartyRole => {
+  if (['complete', 'mutual_cancel', 'refund_both', 'setup_abort', 'contract_timeout'].includes(resolution)) return owner
+  if (resolution === 'party_a_cancel' || resolution === 'award_party_b') return 'party_b'
+  if (resolution === 'party_b_cancel' || resolution === 'award_party_a') return 'party_a'
+  throw new Error('Unknown settlement resolution.')
 }
 
 export type ResolveOptions = {
   nowSeconds?: number
   persist: (store: DemoStore) => void
-  redirect?: (held: ReceivedNote, receiverSecretHex: string, beneficiarySecretHex: string) => Promise<ReceivedNote>
-  randomSecret?: () => string
+  redirect: (held: ReceivedNote, receiverSecretHex: string, beneficiaryOutputHash: string) => Promise<SettlementReceipt>
 }
 
-export const resolveHeldBonds = async (
+export type ResolveAuthority =
+  | {kind: 'messages'; outcomes: string[]; decision?: string}
+  | {kind: 'setup_timeout'}
+  | {kind: 'contract_timeout'; outcomes: string[]; decision?: string}
+
+export const resolveHeldCommitments = async (
   store: DemoStore,
-  contractId: string,
-  outcome: RideOutcome | 'setup_abort',
+  packet: ContractPacket,
+  authority: ResolveAuthority,
   options: ResolveOptions
-): Promise<BondSet> => {
-  const bondSet = bondSetForContract(store, contractId)
-  const existingResolution = store.resolutions[contractId]
-  if (existingResolution && existingResolution !== outcome) {
-    throw new Error(`This contract is already resolving as ${existingResolution}.`)
+): Promise<CommitmentSet> => {
+  const set = commitmentSetForPacket(store, packet)
+  const now = options.nowSeconds ?? Math.floor(Date.now() / 1000)
+  let resolution: SettlementResolution
+  if (authority.kind === 'setup_timeout') {
+    resolution = 'setup_abort'
+  } else if (authority.kind === 'contract_timeout') {
+    if (now < packet.offer.terms.settlementExpires) throw new Error('The contract settlement deadline has not passed yet.')
+    const evidence = evaluateResolutionEvidence(packet, authority.outcomes, authority.decision, now)
+    if (evidence.state === 'disputed') throw new Error('A dispute was raised before timeout and still requires attributable resolution.')
+    if (evidence.state === 'executable') throw new Error('Executable signed authority exists; contract timeout cannot replace it.')
+    resolution = 'contract_timeout'
+  } else {
+    const evidence = evaluateResolutionEvidence(packet, authority.outcomes, authority.decision, now)
+    if (evidence.state !== 'executable') throw new Error(evidence.state === 'disputed' ? 'The contract is disputed and cannot move value yet.' : evidence.reason)
+    resolution = evidence.resolution
   }
-  const payouts = bondSet.entries.map(([requestId]) => payoutFor(store, requestId))
-  const verified = bondSet.entries.map(([requestId, record], index) => Boolean(record.received || payouts[index]))
-  if (outcome === 'setup_abort') {
-    const now = options.nowSeconds ?? Math.floor(Date.now() / 1000)
-    if (!existingResolution && now < bondSet.setupExpires) throw new Error('The setup deadline has not passed yet.')
-    if (!existingResolution && verified.every(Boolean)) throw new Error('Both bonds are already active; setup cannot be aborted.')
-    if (!verified.some(Boolean)) throw new Error('There is no funded bond to refund.')
-  } else if (!verified.every(Boolean)) {
-    throw new Error('Both bonds must be verified before resolution.')
+  const existing = store.resolutions[set.offerId]
+  if (existing && existing !== resolution) throw new Error(`This contract is already resolving as ${existing}.`)
+  const activation = contractActivationState(store, packet)
+  if (resolution === 'setup_abort') {
+    if (!existing && now < set.setupExpires) throw new Error('The setup deadline has not passed yet.')
+    if (!existing && activation.active) throw new Error('The contract is already active; setup cannot be aborted.')
+    if (!PARTY_ROLES.some(role => activation.held[role] || settlementFor(store, set.entries[role][0]))) throw new Error('There is no funded bond to refund.')
+  } else if (!activation.active) {
+    throw new Error('Both held bonds and both payer acknowledgements are required before resolution.')
   }
 
-  store.resolutions[contractId] = outcome
+  store.resolutions[set.offerId] = resolution
   options.persist(store)
-  for (const [requestId, record] of bondSet.entries) {
-    const owner = record.intent.purpose === 'rider_bond' ? 'rider' : 'driver'
-    const beneficiary = beneficiaryFor(owner, outcome)
-    let payout = payoutFor(store, requestId)
-    if (outcome === 'setup_abort' && !record.received && !payout) continue
-    if (payout && payout.beneficiary !== beneficiary) throw new Error('The payout journal names the wrong beneficiary.')
-    if (payout?.state === 'settled') continue
-    if (!record.received) throw new Error('A staged settlement lost its held input; stop and inspect storage.')
-    if (!payout) {
-      payout = {
-        bondRequestId: requestId,
-        beneficiary,
-        secretHex: (options.randomSecret ?? randomSecretHex)(),
-        state: 'staged'
-      }
-      store.payouts[beneficiary].push(payout)
-      options.persist(store)
-    }
-    const redirect = options.redirect
-    if (!redirect) throw new Error('No settlement redirect was provided.')
-    payout.note = await redirect(record.received, record.receiverSecretHex, payout.secretHex)
-    payout.state = 'settled'
-    delete record.received
+  for (const role of PARTY_ROLES) {
+    const [requestId, record] = set.entries[role]
+    const beneficiary = beneficiaryFor(role, resolution)
+    const target = packet.acceptances[beneficiary].payoutHashes[role]
+    let settlement = settlementFor(store, requestId)
+    if (resolution === 'setup_abort' && !record.received && !settlement) continue
+    if (settlement && (settlement.beneficiary !== beneficiary || settlement.outputHash !== target)) throw new Error('The settlement journal names the wrong signed beneficiary target.')
+    if (settlement?.state === 'confirmed') continue
+    if (settlement?.state === 'ambiguous') throw new Error('A settlement response was lost. The beneficiary must probe the signed target before any retry.')
+    if (settlement?.state === 'staged') throw new Error('A staged settlement may already have mutated the mint. Stop and reconcile it without changing the target.')
+    if (!record.received) throw new Error('A settlement lost its held input; stop and inspect browser storage.')
+    settlement = {bondRequestId: requestId, beneficiary, outputHash: target, state: 'staged'}
+    store.settlements.push(settlement)
     options.persist(store)
+    const receipt = await options.redirect(record.received, record.receiverSecretHex, target)
+    settlement.receipt = receipt
+    settlement.state = receipt.outcome === 'confirmed' ? 'confirmed' : 'ambiguous'
+    if (settlement.state === 'confirmed') delete record.received
+    options.persist(store)
+    if (settlement.state === 'ambiguous') throw new Error('The mint response was lost. The beneficiary must probe its signed payout target; do not choose another output.')
   }
-  return bondSet
+  return set
+}
+
+export const applyPayoutAcknowledgement = (
+  store: DemoStore,
+  packet: ContractPacket,
+  notice: SignedSettlementNotice,
+  acknowledgement: SignedPayoutAcknowledgement,
+  persist: (store: DemoStore) => void
+): void => {
+  assertPayoutAcknowledgement(acknowledgement, notice, packet)
+  const settlement = settlementFor(store, notice.bondRequestId)
+  if (!settlement) throw new Error('The arbiter has no settlement journal for this payout acknowledgement.')
+  if (
+    settlement.beneficiary !== notice.beneficiary ||
+    settlement.outputHash !== notice.outputHash ||
+    settlement.receipt?.amountMsat !== notice.amountMsat
+  ) throw new Error('The payout acknowledgement disagrees with the arbiter settlement journal.')
+  settlement.state = 'confirmed'
+  const record = store.requests[notice.bondRequestId]
+  if (record) delete record.received
+  persist(store)
 }

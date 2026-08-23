@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import {hashK1, RequestRefusedError} from 'lnurlcash-kit'
-import {fundReceiverLockedRequest, receiveLockedPayment} from './cash'
-import {createIdentity, outputHashOf, randomSecretHex, signRequest, type ReceiverLockedIntent} from './protocol'
+import {fundReceiverLockedRequest, receiveLockedPayment, receiveRedirectedPayout, redirectHeldNoteToHash} from './cash'
+import {createIdentity, outputHashOf, randomSecretHex, signRequest, type DirectPaymentIntent} from './protocol'
 
 const json = (body: unknown): Response => new Response(JSON.stringify(body), {
   status: 200,
@@ -10,12 +10,12 @@ const json = (body: unknown): Response => new Response(JSON.stringify(body), {
 
 const makeRequest = (receiverSecret: string) => {
   const signer = createIdentity()
-  const intent: ReceiverLockedIntent = {
-    v: 1,
-    rideId: '01'.repeat(16),
-    fareVersion: 1,
-    purpose: 'fare',
-    role: 'driver',
+  const intent: DirectPaymentIntent = {
+    v: 2,
+    contractId: '01'.repeat(16),
+    revision: 1,
+    purpose: 'payment',
+    receiverRole: 'recipient',
     amount: '21',
     currency: 'sat',
     mint: {host: 'mint.test', withdrawLink: 'https://mint.test/w'},
@@ -146,5 +146,56 @@ describe('real-value receiver locking', () => {
       })
     }
     await expect(fundReceiverLockedRequest(request, `https://mint.test/w?k1=${inputSecret}`, {fetch})).rejects.toBeInstanceOf(RequestRefusedError)
+  })
+
+  it('redirects a held note to a beneficiary hash without learning its secret', async () => {
+    const heldSecret = 'cc'.repeat(32)
+    const beneficiarySecret = 'dd'.repeat(32)
+    const beneficiaryHash = hashK1(beneficiarySecret)
+    const held = {
+      noteUrl: `https://mint.test/w?k1=${heldSecret}&amount=21000`,
+      amountMsat: 21_000,
+      callback: 'https://mint.test/w/cb',
+      signatureVerified: null
+    }
+    const fetch = async (input: RequestInfo | URL): Promise<Response> => {
+      const url = new URL(String(input))
+      expect(url.pathname).toBe('/w/cb')
+      expect(url.searchParams.get('k1')).toBe(heldSecret)
+      expect(url.searchParams.get('h')).toBe(beneficiaryHash)
+      expect(String(input)).not.toContain(beneficiarySecret)
+      return json({status: 'OK'})
+    }
+    const receipt = await redirectHeldNoteToHash(held, heldSecret, beneficiaryHash, {fetch})
+    expect(receipt).toMatchObject({outputHash: beneficiaryHash, outcome: 'confirmed', amountMsat: 21_000})
+  })
+
+  it('lets only the beneficiary probe a redirected payout after an ambiguous response', async () => {
+    const heldSecret = 'ee'.repeat(32)
+    const beneficiarySecret = 'ff'.repeat(32)
+    const beneficiaryHash = hashK1(beneficiarySecret)
+    const held = {
+      noteUrl: `https://mint.test/w?k1=${heldSecret}&amount=21000`, amountMsat: 21_000,
+      callback: 'https://mint.test/w/cb', signatureVerified: null
+    }
+    const ambiguous = await redirectHeldNoteToHash(held, heldSecret, beneficiaryHash, {
+      fetch: async () => { throw new TypeError('response lost') }
+    })
+    expect(ambiguous.outcome).toBe('beneficiary_must_probe')
+    const payout = await receiveRedirectedPayout(
+      {host: 'mint.test', withdrawLink: 'https://mint.test/w'},
+      21_000,
+      beneficiarySecret,
+      ambiguous,
+      {fetch: async input => {
+        const url = new URL(String(input))
+        expect(url.searchParams.get('k1')).toBe(beneficiarySecret)
+        return json({
+          tag: 'withdrawRequest', callback: 'https://mint.test/w/cb', k1: beneficiarySecret,
+          minWithdrawable: 21_000, maxWithdrawable: 21_000, defaultDescription: 'settled'
+        })
+      }}
+    )
+    expect(payout.noteUrl).toContain(`k1=${beneficiarySecret}`)
   })
 })
