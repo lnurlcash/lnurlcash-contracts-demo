@@ -3,9 +3,20 @@
 ## Current external state
 
 - `labs.moneyer.dev` has an A record for `2.29.14.244`.
-- Plain HTTP reaches Caddy and redirects to HTTPS.
-- HTTPS currently fails during the TLS handshake because the host has not yet been added as a served site.
-- No application files or Caddy configuration have been changed by this project yet.
+- `https://labs.moneyer.dev` is live; plain HTTP redirects to HTTPS.
+- Release commit: `7fcfa3069746`.
+- Static release: `/opt/moneyer-labs/releases/20260823T090338Z-7fcfa3069746`.
+- Live symlink: `/opt/moneyer-labs/current`.
+- Pre-deployment Caddy backup: `/etc/caddy/Caddyfile.bak-labs-20260823T090338Z-7fcfa3069746`.
+
+The public files verified byte-for-byte after deployment:
+
+```text
+29d3665d07bfd6ca519b5b85c989b707d91c56078e3b213e32382819eb69c904  index.html
+2c16fbbcace9e2853d4aa125e24443d77ed8c92fb010e2fb4ea9035ac9ef2dcb  favicon.svg
+7b77b68435db38ecf1f902d862864d0fda3bbe9cdf2874c27f596051aafb5116  assets/index-CzzKfjsL.css
+eeb819d3613fa2878e63f46f679182d41a0ddf8cf18f77a8265c5b45eee8b85d  assets/index-DNN3R7Ju.js
+```
 
 ## Static release layout
 

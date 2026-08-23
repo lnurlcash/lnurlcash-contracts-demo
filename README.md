@@ -44,7 +44,7 @@ Removing the referee requires mint-enforced spending conditions: signatures, mul
 
 ## Hosting
 
-The registered public home is `labs.moneyer.dev`. It says what this is without implying that conditional bonds are already a stable Moneyer feature. DNS currently resolves to `2.29.14.244`; publishing the static build and adding its Caddy site remain explicit deployment steps.
+The public lab is live at [`labs.moneyer.dev`](https://labs.moneyer.dev). It says what this is without implying that conditional bonds are already a stable Moneyer feature. The exact release, asset hashes and rollback location are recorded in [`DEPLOY.md`](DEPLOY.md).
 
 The static host must send security headers rather than relying on HTML for directives browsers do not accept there. At minimum:
 
