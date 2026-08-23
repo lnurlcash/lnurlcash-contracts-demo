@@ -20,7 +20,7 @@ The next protocol slice is:
 
 1. Rider and driver each generate or select a signing key on their own device.
 2. Their public keys are exchanged over an authenticated channel.
-3. The referee signs a contract containing both participant keys, its own key, both bond amounts, the mint identity, expiry and outcome rules.
+3. The referee signs a contract containing both participant keys, its own key, both bond amounts, the mint identity, expiry and outcome rules. The current request format now binds those keys, but the public-key exchange is not yet implemented.
 4. Each participant countersigns its commitment before funding.
 5. Both funded outputs are independently visible before the contract becomes active.
 6. Completion requires both participant signatures. Self-cancellation requires the cancelling participant's signature. Silence creates a dispute and moves nothing.
@@ -37,7 +37,7 @@ The host is not a coordinator or custodian in this design, but a browser still t
 - a strict Content Security Policy;
 - published source, release commit and production asset hashes;
 - an immutable downloadable build for independent verification;
-- a mint allowlist and pinned mint signing keys;
+- the existing mint allowlist and pinned signing key kept current through an explicit rotation procedure;
 - ultimately, wallet-mediated spending approval so the page never receives `k1`.
 
 Until the wallet-mediated path exists, this is a real-value protocol demonstration, not a sensible place for meaningful balances.

@@ -1,5 +1,10 @@
 import {describe, expect, it} from 'vitest'
+import {finalizeEvent} from 'nostr-tools'
+import {hexToBytes} from '@noble/hashes/utils.js'
 import {
+  REQUEST_KIND,
+  REQUEST_PREFIX,
+  bondSetHashOf,
   createIdentity,
   decodeRequest,
   outputHashOf,
@@ -55,10 +60,58 @@ describe('receiver-locked requests', () => {
   it('lets a receiver inspect an expired request without making it payable again', () => {
     const signer = createIdentity()
     const expired = intent()
-    expired.expires = 1
-    const request = signRequest(expired, signer.secretHex)
-    expect(() => decodeRequest(request.encoded)).toThrow('expired')
-    expect(decodeRequest(request.encoded, 0).intent.expires).toBe(1)
+    expired.expires = 2
+    const event = finalizeEvent({
+      kind: REQUEST_KIND,
+      created_at: 1,
+      tags: [
+        ['d', expired.rideId], ['t', 'lnurlcash-contract-payment'], ['purpose', expired.purpose],
+        ['amount', expired.amount, expired.currency], ['mint', expired.mint.host], ['h', expired.outputHash],
+        ['fare_version', String(expired.fareVersion)]
+      ],
+      content: JSON.stringify(expired)
+    }, hexToBytes(signer.secretHex))
+    const encoded = REQUEST_PREFIX + Buffer.from(JSON.stringify(event)).toString('base64url')
+    expect(() => decodeRequest(encoded)).toThrow('expired')
+    expect(decodeRequest(encoded, 0).intent.expires).toBe(2)
+  })
+
+  it('refuses signed tag smuggling instead of letting clients parse different contracts', () => {
+    const signer = createIdentity()
+    const body = intent()
+    const event = finalizeEvent({
+      kind: REQUEST_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ['d', body.rideId], ['t', 'lnurlcash-contract-payment'], ['purpose', body.purpose],
+        ['amount', body.amount, body.currency], ['mint', body.mint.host], ['h', body.outputHash],
+        ['fare_version', String(body.fareVersion)], ['beneficiary', 'attacker']
+      ],
+      content: JSON.stringify(body)
+    }, hexToBytes(signer.secretHex))
+    const encoded = REQUEST_PREFIX + Buffer.from(JSON.stringify(event)).toString('base64url')
+    expect(() => decodeRequest(encoded)).toThrow('tags')
+  })
+
+  it('refuses a signed request with an excessive replay window', () => {
+    const signer = createIdentity()
+    const longLived = intent()
+    longLived.expires = Math.floor(Date.now() / 1000) + 60 * 60
+    expect(() => decodeRequest(signRequest(longLived, signer.secretHex).encoded)).toThrow('15 minute')
+  })
+
+  it('binds every bond to distinct rider, driver and referee keys', () => {
+    const referee = createIdentity()
+    const rider = createIdentity()
+    const driver = createIdentity()
+    const attacker = createIdentity()
+    const bond = intent()
+    bond.purpose = 'rider_bond'
+    bond.role = 'referee'
+    expect(() => signRequest(bond, referee.secretHex)).toThrow('participant keys')
+    bond.participants = {rider: rider.pubkey, driver: driver.pubkey, referee: referee.pubkey}
+    expect(() => signRequest(bond, attacker.secretHex)).toThrow('named referee')
+    expect(decodeRequest(signRequest(bond, referee.secretHex).encoded).intent.participants).toEqual(bond.participants)
   })
 })
 
@@ -67,8 +120,10 @@ describe('outcome authority', () => {
     const rider = createIdentity()
     const driver = createIdentity()
     const identities = {rider: rider.pubkey, driver: driver.pubkey}
-    const honest = signOutcome('0123456789abcdef', 'rider_cancel', rider.secretHex)
-    const framed = signOutcome('0123456789abcdef', 'rider_cancel', driver.secretHex)
+    const contractId = '01'.repeat(16)
+    const bondSetHash = bondSetHashOf(['11'.repeat(32), '22'.repeat(32)])
+    const honest = signOutcome(contractId, bondSetHash, 'rider_cancel', rider.secretHex)
+    const framed = signOutcome(contractId, bondSetHash, 'rider_cancel', driver.secretHex)
     expect(verifyOutcome(honest, identities)).toBe(true)
     expect(verifyOutcome(framed, identities)).toBe(false)
   })
@@ -78,8 +133,20 @@ describe('outcome authority', () => {
     const driver = createIdentity()
     const stranger = createIdentity()
     const identities = {rider: rider.pubkey, driver: driver.pubkey}
-    expect(verifyOutcome(signOutcome('0123456789abcdef', 'complete', rider.secretHex), identities)).toBe(true)
-    expect(verifyOutcome(signOutcome('0123456789abcdef', 'complete', driver.secretHex), identities)).toBe(true)
-    expect(verifyOutcome(signOutcome('0123456789abcdef', 'complete', stranger.secretHex), identities)).toBe(false)
+    const contractId = '01'.repeat(16)
+    const bondSetHash = bondSetHashOf(['11'.repeat(32), '22'.repeat(32)])
+    expect(verifyOutcome(signOutcome(contractId, bondSetHash, 'complete', rider.secretHex), identities)).toBe(true)
+    expect(verifyOutcome(signOutcome(contractId, bondSetHash, 'complete', driver.secretHex), identities)).toBe(true)
+    expect(verifyOutcome(signOutcome(contractId, bondSetHash, 'complete', stranger.secretHex), identities)).toBe(false)
+  })
+
+  it('does not replay a valid outcome over a different pair of bond requests', () => {
+    const rider = createIdentity()
+    const driver = createIdentity()
+    const first = bondSetHashOf(['11'.repeat(32), '22'.repeat(32)])
+    const second = bondSetHashOf(['11'.repeat(32), '33'.repeat(32)])
+    const signed = signOutcome('01'.repeat(16), first, 'rider_cancel', rider.secretHex)
+    expect(verifyOutcome(signed, {rider: rider.pubkey, driver: driver.pubkey}, first)).toBe(true)
+    expect(verifyOutcome(signed, {rider: rider.pubkey, driver: driver.pubkey}, second)).toBe(false)
   })
 })

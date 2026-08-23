@@ -1,4 +1,5 @@
-import {fetchMintAddress} from 'lnurlcash-kit'
+import {fetchMintAddress, hashK1, noteK1, resolveNoteInput} from 'lnurlcash-kit'
+import {bondSetForContract, contractFundingState, resolveHeldBonds} from './bonds'
 import {fundReceiverLockedRequest, receiveLockedPayment, redirectHeldNote, type FundingReceipt} from './cash'
 import {
   MAX_DEMO_SATS,
@@ -11,11 +12,13 @@ import {
   signOutcome,
   signRequest,
   verifyOutcome,
+  type ContractParticipants,
   type PaymentPurpose,
   type ReceiverLockedIntent,
   type SignedRequest
 } from './protocol'
-import {clearStore, loadStore, saveStore, type DemoStore, type StoredRequest} from './store'
+import {clearStore, loadStore, saveStore, withExclusiveBrowserLock, type DemoStore, type StoredRequest} from './store'
+import {assertTrustedMint, TRUSTED_MINTS} from './trust'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 let store: DemoStore = loadStore()
@@ -44,7 +47,7 @@ const status = (message: string, tone: 'ok' | 'warn' | 'bad' = 'ok'): void => {
 
 const copy = async (value: string): Promise<void> => {
   await navigator.clipboard.writeText(value)
-  status('Copied. Treat request strings as ride data and note strings as money.')
+  status('Copied. Treat request strings as contract data and note strings as money.')
 }
 
 const shareUrl = (encoded: string): string => {
@@ -66,6 +69,7 @@ const readIncomingRequest = (): void => {
   if (!encoded) return
   try {
     incomingRequest = decodeRequest(encoded)
+    assertTrustedMint(incomingRequest.intent.mint)
   } catch (error) {
     incomingRequestError = (error as Error).message
   }
@@ -80,12 +84,22 @@ const createRequest = async (args: {
   amountSats: number
   memo: string
   discoveryUrl: string
+  persist?: boolean
+  participants?: ContractParticipants
 }): Promise<StoredRequest> => {
   if (!Number.isSafeInteger(args.amountSats) || args.amountSats < 1 || args.amountSats > MAX_DEMO_SATS) {
     throw new Error(`Keep each demo transfer between 1 and ${MAX_DEMO_SATS} sats.`)
   }
   const discoveryUrl = new URL(args.discoveryUrl)
+  if (!TRUSTED_MINTS[discoveryUrl.host.toLowerCase()]) throw new Error('That mint is not allowlisted by this public lab.')
+  if (['rider_bond', 'driver_bond'].includes(args.purpose) && Object.values(store.requests).some(record => (
+    record.intent.rideId === args.rideId && record.intent.purpose === args.purpose
+  ))) throw new Error(`This contract already has a ${args.purpose.replace('_', ' ')} request.`)
   const mint = await fetchMintAddress(discoveryUrl.toString())
+  const amountMsat = args.amountSats * 1000
+  if (amountMsat < mint.minWithdrawable || amountMsat > mint.maxWithdrawable) {
+    throw new Error(`The allowlisted mint currently accepts ${mint.minWithdrawable / 1000} to ${mint.maxWithdrawable / 1000} sats.`)
+  }
   const receiverSecretHex = randomSecretHex()
   const intent: ReceiverLockedIntent = {
     v: 1,
@@ -105,22 +119,33 @@ const createRequest = async (args: {
     },
     outputHash: outputHashOf(receiverSecretHex),
     expires: Math.floor(Date.now() / 1000) + 15 * 60,
-    memo: args.memo
+    memo: args.memo,
+    ...(args.participants ? {participants: args.participants} : {})
   }
+  assertTrustedMint(intent.mint)
   const signed = signRequest(intent, roleIdentity(args.role).secretHex)
   const record: StoredRequest = {encoded: signed.encoded, intent, receiverSecretHex}
   store.requests[signed.event.id] = record
-  saveStore(store)
+  if (args.persist !== false) saveStore(store)
   return record
 }
 
 const render = (): void => {
   const requests = Object.entries(store.requests)
   const fare = requests.filter(([, record]) => record.intent.purpose === 'fare').at(-1)
-  const riderBond = requests.filter(([, record]) => record.intent.purpose === 'rider_bond').at(-1)
-  const driverBond = requests.filter(([, record]) => record.intent.purpose === 'driver_bond').at(-1)
-  const rideId = riderBond?.[1].intent.rideId ?? driverBond?.[1].intent.rideId ?? fare?.[1].intent.rideId ?? randomId()
+  const latestBond = requests.filter(([, record]) => ['rider_bond', 'driver_bond'].includes(record.intent.purpose)).at(-1)
+  const bondContractId = latestBond?.[1].intent.rideId
+  const riderBond = requests.filter(([, record]) => record.intent.purpose === 'rider_bond' && record.intent.rideId === bondContractId).at(-1)
+  const driverBond = requests.filter(([, record]) => record.intent.purpose === 'driver_bond' && record.intent.rideId === bondContractId).at(-1)
+  const rideId = bondContractId ?? fare?.[1].intent.rideId ?? randomId()
+  const setupExpired = Boolean(riderBond && driverBond && Math.floor(Date.now() / 1000) >= Math.max(riderBond[1].intent.expires, driverBond[1].intent.expires))
+  const fundedBondCount = [riderBond?.[1].received, driverBond?.[1].received].filter(Boolean).length
   const payerRequest = incomingRequest?.encoded ?? fare?.[1].encoded ?? ''
+  const incomingPayer = incomingRequest?.intent.purpose === 'rider_bond'
+    ? incomingRequest.intent.participants?.rider
+    : incomingRequest?.intent.purpose === 'driver_bond'
+      ? incomingRequest.intent.participants?.driver
+      : undefined
   app.innerHTML = `
     <header class="hero">
       <div class="hero__mark" aria-hidden="true">CC</div>
@@ -137,7 +162,7 @@ const render = (): void => {
       <section class="handoff" aria-label="Remote hand-off">
         <div><p class="eyebrow">INTERNET HAND-OFF</p><h2>Different people. Different devices.</h2></div>
         <p>Copy a signed internet link and send it over Signal, email, Nostr or any channel you already trust. The fragment carries no spend secret and is not included in the HTTP request to this site. Never put a bearer note in a link.</p>
-        ${incomingRequest ? `<p class="incoming"><b>Incoming ${esc(incomingRequest.intent.purpose.replaceAll('_', ' '))}:</b> ${esc(incomingRequest.intent.amount)} sats · contract ${esc(incomingRequest.intent.rideId)} · request ${esc(requestFingerprint(incomingRequest))}</p>` : ''}
+        ${incomingRequest ? `<p class="incoming"><b>Incoming ${esc(incomingRequest.intent.purpose.replaceAll('_', ' '))}:</b> ${esc(incomingRequest.intent.amount)} sats · contract ${esc(incomingRequest.intent.rideId)} · request ${esc(requestFingerprint(incomingRequest))}${incomingPayer ? ` · named payer ${esc(incomingPayer.slice(0, 16))}…` : ''}</p>` : ''}
         ${incomingRequestError ? `<p class="incoming incoming--bad"><b>Incoming request refused:</b> ${esc(incomingRequestError)}</p>` : ''}
       </section>
       <section class="truth-grid" aria-label="What the demo proves">
@@ -151,9 +176,9 @@ const render = (): void => {
         <div class="columns">
           <form data-create-fare class="card">
             <h3>Recipient · request</h3>
-            <label>Contract id<input name="rideId" value="${esc(rideId)}" pattern="[0-9a-f]{16}" required /></label>
+            <label>Contract id<input name="rideId" value="${esc(rideId)}" pattern="[0-9a-f]{32}" required /></label>
             <label>Payment, sats<input name="amount" type="number" min="1" max="${MAX_DEMO_SATS}" value="21" required /></label>
-            <label>Mint discovery<input name="mint" value="${DEFAULT_DISCOVERY}" required /></label>
+            <label>Allowlisted mint discovery<input name="mint" value="${DEFAULT_DISCOVERY}" readonly required /></label>
             <button>Create signed request</button>
             ${fare ? `<textarea readonly aria-label="Signed fare request">${esc(fare[1].encoded)}</textarea><div class="button-row"><button type="button" data-copy="${esc(fare[1].encoded)}" class="secondary">Copy request</button><button type="button" data-share="${esc(fare[1].encoded)}" class="secondary">Copy internet link</button></div>` : ''}
           </form>
@@ -176,10 +201,10 @@ const render = (): void => {
         <p class="panel__intro">The referee receives both bearer notes under secrets it controls. It can refund or redirect them, which is precisely why it can enforce a penalty and precisely why it is a custodian.</p>
         <p class="scenario"><b>Worked scenario:</b> a ride booking, with rider and driver bonds. The same state machine applies to a delivery, marketplace booking or contracted job.</p>
         <form data-create-bonds class="bond-setup">
-          <label>Contract id<input name="rideId" value="${esc(rideId)}" pattern="[0-9a-f]{16}" required /></label>
+          <label>Contract id<input name="rideId" value="${esc(rideId)}" pattern="[0-9a-f]{32}" required /></label>
           <label>Rider bond, sats<input name="rider" type="number" min="1" max="${MAX_DEMO_SATS}" value="10" required /></label>
           <label>Driver bond, sats<input name="driver" type="number" min="1" max="${MAX_DEMO_SATS}" value="15" required /></label>
-          <label>Mint discovery<input name="mint" value="${DEFAULT_DISCOVERY}" required /></label>
+          <label>Allowlisted mint discovery<input name="mint" value="${DEFAULT_DISCOVERY}" readonly required /></label>
           <button>Create both bond requests</button>
         </form>
         <div class="bond-grid">
@@ -190,26 +215,29 @@ const render = (): void => {
             <p>${riderBond?.[1].received ? '✓ Rider bond locked' : '○ Rider bond not verified'}</p>
             <p>${driverBond?.[1].received ? '✓ Driver bond locked' : '○ Driver bond not verified'}</p>
             <div class="outcomes">
-              <button data-resolve="complete" ${riderBond?.[1].received && driverBond?.[1].received ? '' : 'disabled'}>Ride completed · refund both</button>
-              <button data-resolve="rider_cancel" class="danger" ${riderBond?.[1].received && driverBond?.[1].received ? '' : 'disabled'}>Rider signed cancel · both to driver</button>
-              <button data-resolve="driver_cancel" class="danger" ${riderBond?.[1].received && driverBond?.[1].received ? '' : 'disabled'}>Driver signed cancel · both to rider</button>
+              <button data-resolve="complete" data-contract="${esc(bondContractId ?? '')}" ${riderBond?.[1].received && driverBond?.[1].received ? '' : 'disabled'}>Ride completed · refund both</button>
+              <button data-resolve="rider_cancel" data-contract="${esc(bondContractId ?? '')}" class="danger" ${riderBond?.[1].received && driverBond?.[1].received ? '' : 'disabled'}>Rider signed cancel · both to driver</button>
+              <button data-resolve="driver_cancel" data-contract="${esc(bondContractId ?? '')}" class="danger" ${riderBond?.[1].received && driverBond?.[1].received ? '' : 'disabled'}>Driver signed cancel · both to rider</button>
+              <button data-resolve="setup_abort" data-contract="${esc(bondContractId ?? '')}" class="secondary" ${setupExpired && fundedBondCount === 1 ? '' : 'disabled'}>Setup expired · refund funded bond</button>
             </div>
             <p class="micro">No “declare the other person cancelled” button exists. Identity decides who may sign a self-cancellation.</p>
+            ${riderBond?.[1].intent.participants ? `<p class="micro">Bound keys · rider ${esc(riderBond[1].intent.participants.rider.slice(0, 12))}… · driver ${esc(riderBond[1].intent.participants.driver.slice(0, 12))}… · referee ${esc(riderBond[1].intent.participants.referee.slice(0, 12))}…</p>` : ''}
             <p class="micro boundary">This inspector currently simulates all outcome signatures in one browser. Remote identity enrolment and signed outcome return are the next acceptance gate, not a capability claim.</p>
           </article>
         </div>
-        ${payouts()}
+        ${payouts(bondContractId)}
       </section>
 
       <section class="attack-lab">
         <div><p class="eyebrow">ATTACK LAB</p><h2>What a bad actor still tries</h2></div>
         <ul>
-          <li><b>Alter amount or recipient hash:</b> breaks the Nostr signature.</li>
-          <li><b>Replay the payment:</b> a hardened mint refuses the used input and never reissues the burned output id.</li>
-          <li><b>Claim payment failed:</b> the receiver probes its own secret directly at the mint.</li>
-          <li><b>Blame the other party:</b> only a party’s own signed cancellation is automatic.</li>
-          <li><b>Disappear or allege no-show:</b> funds freeze for dispute; GPS alone is not an oracle.</li>
-          <li><b>Malicious referee:</b> can steal both bonds in this flow. Conditional mint outputs are the route out.</li>
+          <li><b>Alter fields or smuggle tags:</b> exact signed tags and body must agree.</li>
+          <li><b>Swap mint, key or callback host:</b> the public trust pins refuse the spend before mutation.</li>
+          <li><b>Replay an outcome on other bonds:</b> every outcome commits to the exact two request ids.</li>
+          <li><b>Race another browser tab:</b> cross-context locks and a durable payout journal serialise money movement.</li>
+          <li><b>Fund only one side:</b> it never activates the contract and is refundable after setup expiry.</li>
+          <li><b>Disappear instead of signing cancel:</b> still forces a dispute; silence is not an oracle.</li>
+          <li><b>Malicious referee or delivered JavaScript:</b> still able to steal in this build. Those are explicit open risks.</li>
         </ul>
       </section>
     </main>
@@ -226,9 +254,13 @@ const bondCard = (role: 'rider' | 'driver', pair: [string, StoredRequest] | unde
     ${pair ? `<p><b>${pair[1].intent.amount} sats</b> · ${pair[1].received ? 'locked' : pair[1].receipt ? 'submitted' : 'waiting'}</p><textarea readonly>${esc(pair[1].encoded)}</textarea><div class="button-row"><button data-copy="${esc(pair[1].encoded)}" class="secondary">Copy request</button><button data-share="${esc(pair[1].encoded)}" class="secondary">Copy internet link</button></div><form data-fund-bond="${pair[0]}"><label>Exact ${pair[1].intent.amount} sat note<textarea name="note" required></textarea></label><button>Lock ${role} bond</button></form>${pair[1].receipt && !pair[1].received ? `<button data-verify="${pair[0]}" class="secondary">Referee checks mint</button>` : ''}` : '<p>Create the bond contract first.</p>'}
   </article>`
 
-const payouts = (): string => {
-  const rows = (['rider', 'driver'] as const).flatMap(role => store.payouts[role].map(payout => `<li><b>${role}</b><span>${payout.note ? `${payout.note.amountMsat / 1000} sats` : 'staged · needs reconciliation'}</span>${payout.note ? `<button data-copy="${esc(payout.note.noteUrl)}" class="secondary">Copy note</button>` : '<span></span>'}</li>`)).join('')
-  return rows ? `<div class="payouts"><h3>Resolved bearer outputs</h3><ul>${rows}</ul>${store.resolution && (store.payouts.rider.some(payout => payout.state === 'staged') || store.payouts.driver.some(payout => payout.state === 'staged')) ? `<button data-resolve="${store.resolution}" class="secondary">Reconcile staged settlement</button>` : ''}<p class="micro">Import and rotate these in a proper wallet. In production the beneficiary wallet would generate the output hash, so the referee would never know this secret.</p></div>` : ''
+const payouts = (contractId: string | undefined): string => {
+  if (!contractId) return ''
+  const belongsToContract = (payout: DemoStore['payouts']['rider'][number]): boolean => store.requests[payout.bondRequestId]?.intent.rideId === contractId
+  const rows = (['rider', 'driver'] as const).flatMap(role => store.payouts[role].filter(belongsToContract).map(payout => `<li><b>${role}</b><span>${payout.note ? `${payout.note.amountMsat / 1000} sats` : 'staged · needs reconciliation'}</span>${payout.note ? `<button data-copy="${esc(payout.note.noteUrl)}" class="secondary">Copy note</button>` : '<span></span>'}</li>`)).join('')
+  const resolution = store.resolutions[contractId]
+  const staged = (['rider', 'driver'] as const).some(role => store.payouts[role].some(payout => belongsToContract(payout) && payout.state === 'staged'))
+  return rows ? `<div class="payouts"><h3>Resolved bearer outputs</h3><ul>${rows}</ul>${resolution && staged ? `<button data-resolve="${resolution}" data-contract="${esc(contractId)}" class="secondary">Reconcile staged settlement</button>` : ''}<p class="micro">Import and rotate these in a proper wallet. In production the beneficiary wallet would generate the output hash, so the referee would never know this secret.</p></div>` : ''
 }
 
 const parseForm = (form: HTMLFormElement): FormData => new FormData(form)
@@ -239,61 +271,113 @@ const bind = (): void => {
 
   document.querySelector<HTMLFormElement>('[data-create-fare]')?.addEventListener('submit', event => void run(event, async form => {
     const data = parseForm(form)
-    await createRequest({purpose: 'fare', role: 'driver', rideId: String(data.get('rideId')), amountSats: Number(data.get('amount')), memo: 'Recipient-locked service payment', discoveryUrl: String(data.get('mint'))})
+    const contractId = String(data.get('rideId'))
+    await withExclusiveBrowserLock(`contract:${contractId}`, async () => {
+      store = loadStore()
+      await createRequest({purpose: 'fare', role: 'driver', rideId: contractId, amountSats: Number(data.get('amount')), memo: 'Recipient-locked service payment', discoveryUrl: String(data.get('mint'))})
+    })
     render()
-    status('Driver request created. Its receiver secret was persisted before the request was shown.')
+    status('Recipient request created. Its receiver secret was persisted before the request was shown.')
   }))
 
   document.querySelector<HTMLFormElement>('[data-pay-request]')?.addEventListener('submit', event => void run(event, async form => {
     const data = parseForm(form)
     const request = decodeRequest(String(data.get('request')))
-    if (!confirm(`Fund ${request.intent.amount} sats for ${request.intent.purpose.replaceAll('_', ' ')}?\n\nContract: ${request.intent.rideId}\nMint: ${request.intent.mint.host}\nSigner: ${request.event.pubkey.slice(0, 16)}…\nRequest: ${requestFingerprint(request)}`)) return
-    const receipt = await fundReceiverLockedRequest(request, String(data.get('note')))
-    const local = storedByEncoded(request.encoded)
-    if (local) local.receipt = receipt
-    saveStore(store)
+    assertTrustedMint(request.intent.mint)
+    const namedPayer = request.intent.purpose === 'rider_bond' ? request.intent.participants?.rider : request.intent.purpose === 'driver_bond' ? request.intent.participants?.driver : undefined
+    if (!confirm(`Fund ${request.intent.amount} sats for ${request.intent.purpose.replaceAll('_', ' ')}?\n\nContract: ${request.intent.rideId}\nMint: ${request.intent.mint.host}\nSigner: ${request.event.pubkey.slice(0, 16)}…${namedPayer ? `\nContract names payer: ${namedPayer.slice(0, 16)}…` : ''}\nRequest: ${requestFingerprint(request)}`)) return
+    const noteInput = String(data.get('note'))
+    const resolvedNote = resolveNoteInput(noteInput)
+    const spendSecret = resolvedNote ? noteK1(resolvedNote) : null
+    if (!spendSecret) throw new Error('That is not an LNURLcash bearer note.')
+    let receipt: FundingReceipt | undefined
+    await withExclusiveBrowserLock(`spend:${hashK1(spendSecret)}`, async () => {
+      receipt = await fundReceiverLockedRequest(request, noteInput)
+      store = loadStore()
+      const local = storedByEncoded(request.encoded)
+      if (local) local.receipt = receipt
+      saveStore(store)
+    }, {requireCrossContext: true})
     render()
-    status(receipt.outcome === 'confirmed' ? 'Mint confirmed the receiver-locked transfer.' : 'Mutation outcome is unknown. The receiver must probe; do not retry or discard anything.', receipt.outcome === 'confirmed' ? 'ok' : 'warn')
+    status(receipt!.outcome === 'confirmed' ? 'Mint confirmed the receiver-locked transfer.' : 'Mutation outcome is unknown. The receiver must probe; do not retry or discard anything.', receipt!.outcome === 'confirmed' ? 'ok' : 'warn')
   }))
 
   document.querySelector<HTMLFormElement>('[data-create-bonds]')?.addEventListener('submit', event => void run(event, async form => {
     const data = parseForm(form)
-    const base = {role: 'referee' as const, rideId: String(data.get('rideId')), discoveryUrl: String(data.get('mint'))}
-    await createRequest({...base, purpose: 'rider_bond', amountSats: Number(data.get('rider')), memo: 'Rider commitment bond'})
-    await createRequest({...base, purpose: 'driver_bond', amountSats: Number(data.get('driver')), memo: 'Driver commitment bond'})
+    const contractId = String(data.get('rideId'))
+    await withExclusiveBrowserLock(`contract:${contractId}`, async () => {
+      store = loadStore()
+      const participants = {
+        rider: roleIdentity('rider').pubkey,
+        driver: roleIdentity('driver').pubkey,
+        referee: roleIdentity('referee').pubkey
+      }
+      const base = {role: 'referee' as const, rideId: contractId, discoveryUrl: String(data.get('mint')), participants}
+      try {
+        await createRequest({...base, purpose: 'rider_bond', amountSats: Number(data.get('rider')), memo: 'Rider commitment bond', persist: false})
+        await createRequest({...base, purpose: 'driver_bond', amountSats: Number(data.get('driver')), memo: 'Driver commitment bond', persist: false})
+        saveStore(store)
+      } catch (error) {
+        store = loadStore()
+        throw error
+      }
+    })
     render()
     status('Both bond requests created and signed by the referee identity.')
   }))
 
   document.querySelectorAll<HTMLFormElement>('[data-fund-bond]').forEach(form => form.addEventListener('submit', event => void run(event, async submitted => {
     const id = submitted.dataset.fundBond!
-    const record = store.requests[id]
-    if (!record) throw new Error('That bond request is no longer stored.')
-    const request = decodeRequest(record.encoded, 0)
-    record.receipt = await fundReceiverLockedRequest(request, String(parseForm(submitted).get('note')))
-    saveStore(store)
-    try { record.received = await receiveLockedPayment(request, record.receiverSecretHex, record.receipt) } catch { /* surfaced as submitted; referee can probe again */ }
-    saveStore(store)
+    const original = store.requests[id]
+    if (!original) throw new Error('That bond request is no longer stored.')
+    const noteInput = String(parseForm(submitted).get('note'))
+    const resolvedNote = resolveNoteInput(noteInput)
+    const spendSecret = resolvedNote ? noteK1(resolvedNote) : null
+    if (!spendSecret) throw new Error('That is not an LNURLcash bearer note.')
+    await withExclusiveBrowserLock(`contract:${original.intent.rideId}`, async () => withExclusiveBrowserLock(`spend:${hashK1(spendSecret)}`, async () => {
+      store = loadStore()
+      const record = store.requests[id]
+      if (!record) throw new Error('That bond request is no longer stored.')
+      const request = decodeRequest(record.encoded)
+      assertTrustedMint(request.intent.mint)
+      record.receipt = await fundReceiverLockedRequest(request, noteInput)
+      saveStore(store)
+      try { record.received = await receiveLockedPayment(request, record.receiverSecretHex, record.receipt) } catch { /* surfaced as submitted; referee can probe again */ }
+      saveStore(store)
+    }, {requireCrossContext: true}), {requireCrossContext: true})
+    const record = store.requests[id]!
     render()
     status(record.received ? 'Referee now controls that real-sat bond.' : 'Bond mutation submitted. Referee must probe the output before treating it as locked.', record.received ? 'ok' : 'warn')
   })))
 
   document.querySelectorAll<HTMLElement>('[data-verify]').forEach(button => button.addEventListener('click', () => void run(null, async () => {
     const id = button.dataset.verify!
-    const record = store.requests[id]
-    if (!record) throw new Error('Request not found.')
-    const request = decodeRequest(record.encoded)
-    record.received = await receiveLockedPayment(request, record.receiverSecretHex, record.receipt)
-    saveStore(store)
+    const original = store.requests[id]
+    if (!original) throw new Error('Request not found.')
+    await withExclusiveBrowserLock(`contract:${original.intent.rideId}`, async () => {
+      store = loadStore()
+      const record = store.requests[id]
+      if (!record) throw new Error('Request not found.')
+      const request = decodeRequest(record.encoded, 0)
+      assertTrustedMint(request.intent.mint)
+      record.received = await receiveLockedPayment(request, record.receiverSecretHex, record.receipt)
+      saveStore(store)
+    })
+    const record = store.requests[id]!
     render()
     status(`Mint confirms ${record.intent.amount} sats under the receiver-only secret.`)
   })))
 
   document.querySelectorAll<HTMLElement>('[data-resolve]').forEach(button => button.addEventListener('click', () => void run(null, async () => {
-    const outcome = button.dataset.resolve as 'complete' | 'rider_cancel' | 'driver_cancel'
-    await resolveBonds(outcome)
+    const outcome = button.dataset.resolve as 'complete' | 'rider_cancel' | 'driver_cancel' | 'setup_abort'
+    const contractId = button.dataset.contract
+    if (!contractId) throw new Error('No contract is selected for resolution.')
+    await withExclusiveBrowserLock(`contract:${contractId}`, async () => {
+      store = loadStore()
+      await resolveBonds(contractId, outcome)
+    }, {requireCrossContext: true})
     render()
-    status('Both bonds were redirected to fresh beneficiary hashes. The referee no longer controls the old notes.')
+    status(outcome === 'setup_abort' ? 'The funded setup bond was returned after the deadline.' : 'The old bond outputs were spent. In this inspector the referee still knows each payout secret until the beneficiary rotates it.', outcome === 'setup_abort' ? 'ok' : 'warn')
   })))
 
   document.querySelector<HTMLElement>('[data-reset]')?.addEventListener('click', () => {
@@ -304,46 +388,25 @@ const bind = (): void => {
   })
 }
 
-const resolveBonds = async (outcome: 'complete' | 'rider_cancel' | 'driver_cancel'): Promise<void> => {
-  if (store.resolution && store.resolution !== outcome) throw new Error(`This contract is already resolving as ${store.resolution}.`)
-  const entries = Object.entries(store.requests).filter(([, record]) => ['rider_bond', 'driver_bond'].includes(record.intent.purpose))
-  if (entries.length < 2 || entries.some(([id, record]) => !record.received && ![...store.payouts.rider, ...store.payouts.driver].some(payout => payout.bondRequestId === id))) {
-    throw new Error('Both bonds must be verified before resolution.')
-  }
-  const rideId = entries[0]![1].intent.rideId
-  if (entries.some(([, record]) => record.intent.rideId !== rideId)) throw new Error('The two bonds belong to different rides.')
-  const identities = {rider: roleIdentity('rider').pubkey, driver: roleIdentity('driver').pubkey}
+const resolveBonds = async (rideId: string, outcome: 'complete' | 'rider_cancel' | 'driver_cancel' | 'setup_abort'): Promise<void> => {
+  const bondSet = bondSetForContract(store, rideId)
+  contractFundingState(store, rideId)
+  const identities = {rider: bondSet.participants.rider, driver: bondSet.participants.driver}
   if (outcome === 'complete') {
-    const riderSigned = signOutcome(rideId, outcome, roleIdentity('rider').secretHex)
-    const driverSigned = signOutcome(rideId, outcome, roleIdentity('driver').secretHex)
+    const riderSigned = signOutcome(rideId, bondSet.bondSetHash, outcome, roleIdentity('rider').secretHex)
+    const driverSigned = signOutcome(rideId, bondSet.bondSetHash, outcome, roleIdentity('driver').secretHex)
     if (
-      !verifyOutcome(riderSigned, identities) ||
-      !verifyOutcome(driverSigned, identities) ||
+      !verifyOutcome(riderSigned, identities, bondSet.bondSetHash) ||
+      !verifyOutcome(driverSigned, identities, bondSet.bondSetHash) ||
       riderSigned.event.pubkey !== identities.rider ||
       driverSigned.event.pubkey !== identities.driver
     ) throw new Error('Both completion signatures are required.')
-  } else {
+  } else if (outcome !== 'setup_abort') {
     const canceller = outcome === 'rider_cancel' ? 'rider' : 'driver'
-    const signed = signOutcome(rideId, outcome, roleIdentity(canceller).secretHex)
-    if (!verifyOutcome(signed, identities)) throw new Error('The cancellation signature does not belong to the cancelling party.')
+    const signed = signOutcome(rideId, bondSet.bondSetHash, outcome, roleIdentity(canceller).secretHex)
+    if (!verifyOutcome(signed, identities, bondSet.bondSetHash)) throw new Error('The cancellation signature does not belong to the cancelling party.')
   }
-  store.resolution = outcome
-  saveStore(store)
-  for (const [requestId, record] of entries) {
-    const bondOwner = record.intent.purpose === 'rider_bond' ? 'rider' : 'driver'
-    const beneficiary: 'rider' | 'driver' = outcome === 'complete' ? bondOwner : outcome === 'rider_cancel' ? 'driver' : 'rider'
-    const existing = [...store.payouts.rider, ...store.payouts.driver].find(payout => payout.bondRequestId === requestId)
-    if (existing?.state === 'settled') continue
-    if (!record.received) throw new Error('A staged settlement lost its held input; stop and inspect storage.')
-    const payout = existing ?? {bondRequestId: requestId, beneficiary, secretHex: randomSecretHex(), state: 'staged' as const}
-    if (!existing) store.payouts[beneficiary].push(payout)
-    // Persist the only copy before disclosing its hash to the mint.
-    saveStore(store)
-    payout.note = await redirectHeldNote(record.received, record.receiverSecretHex, payout.secretHex)
-    payout.state = 'settled'
-    delete record.received
-    saveStore(store)
-  }
+  await resolveHeldBonds(store, rideId, outcome, {persist: saveStore, redirect: redirectHeldNote})
 }
 
 const run = async (event: Event | null, work: (form: HTMLFormElement) => Promise<void>): Promise<void> => {

@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {hashK1} from 'lnurlcash-kit'
+import {hashK1, RequestRefusedError} from 'lnurlcash-kit'
 import {fundReceiverLockedRequest, receiveLockedPayment} from './cash'
 import {createIdentity, outputHashOf, randomSecretHex, signRequest, type ReceiverLockedIntent} from './protocol'
 
@@ -12,7 +12,7 @@ const makeRequest = (receiverSecret: string) => {
   const signer = createIdentity()
   const intent: ReceiverLockedIntent = {
     v: 1,
-    rideId: '0123456789abcdef',
+    rideId: '01'.repeat(16),
     fareVersion: 1,
     purpose: 'fare',
     role: 'driver',
@@ -114,5 +114,37 @@ describe('real-value receiver locking', () => {
       `https://mint.test/w?k1=${inputSecret}`,
       {fetch: async () => { throw new Error('network must not be reached') }}
     )).rejects.toThrow('different withdraw endpoint')
+  })
+
+  it('refuses a mint callback that tries to send the bearer secret to another host', async () => {
+    const inputSecret = '88'.repeat(32)
+    const request = makeRequest('99'.repeat(32))
+    let evilRequests = 0
+    const fetch = async (input: RequestInfo | URL): Promise<Response> => {
+      const url = new URL(String(input))
+      if (url.host === 'evil.test') evilRequests += 1
+      return json({
+        tag: 'withdrawRequest',
+        callback: 'https://evil.test/cb',
+        k1: inputSecret,
+        minWithdrawable: 21_000,
+        maxWithdrawable: 21_000,
+        defaultDescription: 'host swap'
+      })
+    }
+    await expect(fundReceiverLockedRequest(request, `https://mint.test/w?k1=${inputSecret}`, {fetch})).rejects.toThrow('another host')
+    expect(evilRequests).toBe(0)
+  })
+
+  it('does not label a request refused before transmission as an ambiguous payment', async () => {
+    const inputSecret = 'aa'.repeat(32)
+    const request = makeRequest('bb'.repeat(32))
+    const fetch = async (): Promise<Response> => {
+      return json({
+        tag: 'withdrawRequest', callback: 'http://mint.test/w/cb', k1: inputSecret,
+        minWithdrawable: 21_000, maxWithdrawable: 21_000, defaultDescription: 'test note'
+      })
+    }
+    await expect(fundReceiverLockedRequest(request, `https://mint.test/w?k1=${inputSecret}`, {fetch})).rejects.toBeInstanceOf(RequestRefusedError)
   })
 })

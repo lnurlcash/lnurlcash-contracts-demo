@@ -3,6 +3,7 @@ import {
   fetchNoteInfo,
   hashK1,
   noteK1,
+  RequestRefusedError,
   resolveNoteInput,
   rotateNoteWithHash,
   verifyNoteSignature,
@@ -27,9 +28,16 @@ export type ReceivedNote = {
   amountMsat: number
   callback: string
   signatureVerified: boolean | null
+  mintPubkey?: string
 }
 
 const amountMsatOf = (intent: ReceiverLockedIntent): number => Number(intent.amount) * 1000
+
+const assertCallbackAtMint = (callback: string, mintHost: string): void => {
+  if (new URL(callback).host.toLowerCase() !== mintHost.toLowerCase()) {
+    throw new Error('The mint tried to move the bearer spend to another host.')
+  }
+}
 
 const noteUrlWithSignature = (withdrawLink: string, secretHex: string, amountMsat: number, signature?: string): string => {
   const basic = buildNoteUrl(withdrawLink, secretHex, amountMsat)
@@ -56,6 +64,7 @@ export const fundReceiverLockedRequest = async (
   const k1 = noteK1(noteUrl)
   if (!k1) throw new Error('The note has no spend secret.')
   const info = await fetchNoteInfo(noteUrl, options)
+  assertCallbackAtMint(info.callback, request.intent.mint.host)
   if (request.intent.mint.mintPubkey && info.mintPubkey !== request.intent.mint.mintPubkey) {
     throw new Error('The request and live note disagree about the mint signing key.')
   }
@@ -75,7 +84,8 @@ export const fundReceiverLockedRequest = async (
       outcome: 'confirmed',
       createdAt: Date.now()
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof RequestRefusedError) throw error
     // The mutating GET may have landed even when its response did not. The
     // payer cannot probe the output because deliberately only the receiver
     // knows its secret. Never call this a failure and never retry with a
@@ -111,6 +121,7 @@ export const receiveLockedPayment = async (
   }
   const candidate = noteUrlWithSignature(request.intent.mint.withdrawLink, receiverSecretHex, expected, receipt?.signature)
   const info = await fetchNoteInfo(candidate, options)
+  assertCallbackAtMint(info.callback, request.intent.mint.host)
   if (info.maxWithdrawable !== expected) throw new Error(`The mint reports ${info.maxWithdrawable} msat, not the requested ${expected} msat.`)
   if (request.intent.mint.mintPubkey && info.mintPubkey !== request.intent.mint.mintPubkey) {
     throw new Error('The request and received note disagree about the mint signing key.')
@@ -120,7 +131,13 @@ export const receiveLockedPayment = async (
     signatureVerified = verifyNoteSignature(receiverSecretHex, expected, receipt.signature, request.intent.mint.mintPubkey)
     if (!signatureVerified) throw new Error('The mint signature on this output does not verify.')
   }
-  return {noteUrl: candidate, amountMsat: expected, callback: info.callback, signatureVerified}
+  return {
+    noteUrl: candidate,
+    amountMsat: expected,
+    callback: info.callback,
+    signatureVerified,
+    ...(request.intent.mint.mintPubkey ? {mintPubkey: request.intent.mint.mintPubkey} : {})
+  }
 }
 
 export const redirectHeldNote = async (
@@ -129,6 +146,8 @@ export const redirectHeldNote = async (
   beneficiarySecretHex: string,
   options: LnurlcashOptions = {}
 ): Promise<ReceivedNote> => {
+  const heldHost = new URL(held.noteUrl).host
+  assertCallbackAtMint(held.callback, heldHost)
   const outputHash = hashK1(beneficiarySecretHex)
   let signature: string | undefined
   try {
@@ -138,6 +157,18 @@ export const redirectHeldNote = async (
   }
   const nextUrl = noteUrlWithSignature(new URL(held.noteUrl).origin + new URL(held.noteUrl).pathname, beneficiarySecretHex, held.amountMsat, signature)
   const info = await fetchNoteInfo(nextUrl, options)
+  assertCallbackAtMint(info.callback, heldHost)
   if (info.maxWithdrawable !== held.amountMsat) throw new Error('The settlement output has the wrong value.')
-  return {noteUrl: nextUrl, amountMsat: held.amountMsat, callback: info.callback, signatureVerified: null}
+  if (held.mintPubkey && info.mintPubkey !== held.mintPubkey) throw new Error('The settlement output changed mint signing key.')
+  const signatureVerified = signature && held.mintPubkey
+    ? verifyNoteSignature(beneficiarySecretHex, held.amountMsat, signature, held.mintPubkey)
+    : null
+  if (signatureVerified === false) throw new Error('The mint signature on the settlement output does not verify.')
+  return {
+    noteUrl: nextUrl,
+    amountMsat: held.amountMsat,
+    callback: info.callback,
+    signatureVerified,
+    ...(held.mintPubkey ? {mintPubkey: held.mintPubkey} : {})
+  }
 }

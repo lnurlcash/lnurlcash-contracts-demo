@@ -10,7 +10,7 @@
 
 - **Sender double-spend:** the sender sends a rotate to `h = sha256(recipient_secret)`. The sender never learns `recipient_secret`.
 - **Forged amount, mint or output:** they are inside a signed Nostr event. The payer refuses any tag/body mismatch.
-- **Fake success receipt:** the driver checks its secret directly against the mint and uses the mint's authoritative `maxWithdrawable`.
+- **Fake success receipt:** the recipient checks its secret directly against the mint and uses the mint's authoritative `maxWithdrawable`.
 - **Replay:** the payer's input is burned atomically. The demo requires a hardened mint that records burns permanently and never reissues a burned output id; the current LUD-25 draft does not yet say that clearly enough.
 - **Ambiguous HTTP outcome:** the payer reports “receiver must probe”, never “failed”. Mutation retries are unsafe on mints that do not replay identical requests idempotently.
 
@@ -20,6 +20,8 @@
 - **A party blaming the other:** automatic cancellation is a signed self-cancellation. A body field saying “the other person did it” has no authority.
 - **One party failing to commit:** the ride does not become bonded until both outputs are independently visible at the mint.
 - **A party denying it funded:** the output exists under the referee's secret and may carry the mint's signature over its hash and amount.
+- **Cross-contract substitution:** outcomes commit to the exact pair of signed bond requests, and resolution selects exactly one rider/driver pair for one contract.
+- **Partial setup grief:** after the signed setup deadline, a single funded bond can be returned; both funded bonds make setup active and stop that abort path.
 
 ## What it does not defend against
 
@@ -30,10 +32,12 @@
 - **Provider price fraud:** the customer must see and approve the final signed amount. The payment rail cannot decide whether a fare, delivery fee or job total was fair.
 - **Traffic analysis:** the mint sees note timing and linkage. NIP-59 hides request contents from relays, not from the mint handling the notes.
 - **Shared-link metadata:** a URL fragment is not sent to the static web server, but it is visible to the recipient, the channel carrying the link, browser history, extensions and screenshots. It contains contract metadata, not a spend secret.
-- **Remote outcome impersonation:** the current one-browser outcome inspector is not evidence of remote participant enrolment. A public bond pilot must bind rider and driver keys during setup and import their signed outcome events from separate devices.
+- **Remote outcome impersonation:** signed bond requests now bind rider, driver and referee keys, but the current one-browser inspector is not evidence that remote people authenticated those keys. A public bond pilot must import participant acknowledgements and signed outcome events from separate devices.
 - **Host supply-chain attack:** a static host does not receive URL fragments, but it serves code that can read the page. A compromised deployment could exfiltrate a pasted `k1`. Publish source and asset hashes, keep the hard value cap, and move spending approval into a wallet before using meaningful value.
 - **Valid signature, wrong person:** a Nostr signature proves control of its key, not that the key belongs to the intended counterparty. Compare the signer fingerprint over an authenticated channel and bind participant keys into the contract.
-- **Receiver-selected mint:** a signed request can honestly name a hostile mint. The public demo must allowlist mints and pin keys; displaying the hostname is not enough for ordinary users.
+- **Receiver-selected mint:** the public build now allowlists the ForgeSworn endpoint and key. A fork that restores arbitrary mint input also restores this attack unless it adds an explicit trust ceremony.
+- **Rational silence:** a bad actor can refuse to sign the cancellation that would penalise it and force a dispute instead. The bond cannot distinguish malice from loss of connectivity.
+- **Payout-secret custody:** this inspector generates beneficiary secrets in the referee browser. The beneficiary must rotate immediately; production must use beneficiary-generated hashes.
 
 ## Operational rules
 
@@ -43,3 +47,4 @@
 - Never log, report or put a note URL into analytics.
 - Never call a mutation failure merely because its response was lost.
 - Never settle a cancellation against silence alone.
+- Refuse value movement when cross-tab Web Locks are unavailable.

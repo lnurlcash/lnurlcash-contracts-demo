@@ -23,7 +23,7 @@ Silence must not be treated as a confession. Otherwise a relay outage, flat batt
 
 ## Route available now: explicit referee
 
-The demo's referee controls two LNURLcash notes during the ride. It applies the table above and redirects each note into a beneficiary-generated output hash. This is enforceable and easy to audit, but the referee can steal. A federation can reduce single-operator risk but remains a custody system.
+The demo's referee controls two LNURLcash notes during the ride. It applies the table above, but the present single-browser inspector also generates the payout secret and therefore knows it until the beneficiary rotates. A real remote implementation must redirect into a beneficiary-generated output hash. The referee can still steal held bonds. A federation can reduce single-operator risk but remains a custody system.
 
 DonkeyRide's existing LND HODL provider has the same essential boundary. The operator holds the preimage, may settle the held invoice into its own node, and must then compensate the wronged party. Automatic invoice timeout limits the hold, but does not make outcome selection or the compensation leg trustless.
 
