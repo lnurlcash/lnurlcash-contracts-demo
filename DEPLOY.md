@@ -4,19 +4,22 @@
 
 - `labs.moneyer.dev` has an A record for `2.29.14.244`.
 - `https://labs.moneyer.dev` is live; plain HTTP redirects to HTTPS.
-- Release commit: `7fcfa3069746`.
-- Static release: `/opt/moneyer-labs/releases/20260823T090338Z-7fcfa3069746`.
+- Release commit: `383968ff110e`.
+- Static release: `/opt/moneyer-labs/releases/20260823T101650Z-383968ff110e`.
 - Live symlink: `/opt/moneyer-labs/current`.
 - Pre-deployment Caddy backup: `/etc/caddy/Caddyfile.bak-labs-20260823T090338Z-7fcfa3069746`.
+- Immediate static rollback: `/opt/moneyer-labs/releases/20260823T090338Z-7fcfa3069746`.
 
 The public files verified byte-for-byte after deployment:
 
 ```text
-29d3665d07bfd6ca519b5b85c989b707d91c56078e3b213e32382819eb69c904  index.html
+b6b22ba07f0541282b8ad9aca53117fb39d9c9702b25907cf74550e7d9435837  index.html
 2c16fbbcace9e2853d4aa125e24443d77ed8c92fb010e2fb4ea9035ac9ef2dcb  favicon.svg
-7b77b68435db38ecf1f902d862864d0fda3bbe9cdf2874c27f596051aafb5116  assets/index-CzzKfjsL.css
-eeb819d3613fa2878e63f46f679182d41a0ddf8cf18f77a8265c5b45eee8b85d  assets/index-DNN3R7Ju.js
+6f3517ee9ac05103bdd2bb5b0223acf4a2baac0d573e5ed617c6f5f40a833c4d  assets/index-BUoIhlzZ.css
+9b80b8c94d4da060e52461a3abc946894938c41648611b58feef4b3a3d8f308a  assets/index-D-S_i_Gq.js
 ```
+
+The v2 release passed 46 tests, the production build, dependency audit, public-DNS and direct-origin HTTPS checks, and the three-profile remote ceremony against the live mint discovery endpoint. That ceremony moved no sats; the disposable-note funding and settlement matrix remains an explicit acceptance gate in `ADVERSARIAL-REVIEW.md`.
 
 ## Static release layout
 
@@ -40,9 +43,9 @@ HTML should revalidate. Fingerprinted assets may be cached immutably. Do not add
 2. Record SHA-256 for `dist/index.html`, CSS, JavaScript and favicon.
 3. Copy to a new staging directory on the host; never build with production credentials present.
 4. Validate Caddy configuration before reload.
-5. Atomically switch the static root and reload Caddy.
+5. Atomically switch the static root. Reload Caddy only when its validated configuration changed.
 6. Confirm the certificate, headers, asset hashes and desktop/mobile rendering from outside the server.
 7. Run the separate-browser hand-off smoke against the public origin.
-8. Move no real sats until the remote-identity gates in `ADVERSARIAL-REVIEW.md` are satisfied or the site is labelled as the single-browser inspector it currently is.
+8. Move no real sats until the remaining lifecycle gates in `ADVERSARIAL-REVIEW.md` are satisfied, and keep every pre-production experiment tiny and disposable.
 
 Keep a timestamped copy of the previous static directory for rollback. The deployment must not share write permissions with the mint process or expose any mint database, environment or Lightning credentials.
