@@ -1,7 +1,7 @@
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex} from '@noble/hashes/utils.js'
 import {fetchMintAddress, hashK1, noteK1, resolveNoteInput} from 'lnurlcash-kit'
-import {applyPayoutAcknowledgement, contractActivationState, evaluateResolutionEvidence, resolveHeldCommitments} from './bonds'
+import {applyPayoutAcknowledgement, contractActivationState, disputeTerminalAt, evaluateResolutionEvidence, resolveHeldCommitments} from './bonds'
 import {
   fundReceiverLockedRequest,
   receiveLockedPayment,
@@ -370,10 +370,6 @@ const outcomeHtml = (contract: NonNullable<ReturnType<typeof latestContract>>): 
     try { activation = contractActivationState(store, packet) } catch { /* fail closed */ }
   }
   const evidence = evaluateResolutionEvidence(packet, contract.record.outcomes, contract.record.decision)
-  const hasDispute = contract.record.outcomes.some(encoded => {
-    const message = decodeContractMessage(encoded, 0)
-    return message.type === 'outcome' && message.outcome === 'dispute'
-  })
   const settlementRows = contract.record.settlementNotices.map(encoded => {
     const notice = decodeContractMessage(encoded, 0)
     if (notice.type !== 'settlement_notice') throw new Error('Stored settlement notice is malformed.')
@@ -390,14 +386,24 @@ const outcomeHtml = (contract: NonNullable<ReturnType<typeof latestContract>>): 
   }).join('')
   const setupExpired = Math.floor(Date.now() / 1000) >= contract.offer.terms.setupExpires
   const heldCount = activation ? PARTY_ROLES.filter(role => activation!.held[role]).length : 0
-  const contractExpired = Math.floor(Date.now() / 1000) >= contract.offer.terms.settlementExpires
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const contractExpired = nowSeconds >= contract.offer.terms.settlementExpires
+  // Two distinct no-fault exits. A dispute never becomes 'pending', so without
+  // the second test the terminal refund would be unreachable from this browser.
+  const timeoutLabel = evidence.state === 'disputed'
+    ? 'Dispute unresolved past the challenge deadline · refund both, no fault assigned'
+    : 'Settlement window expired · refund both'
+  const canTimeout = Boolean(activation?.active) && (
+    (contractExpired && evidence.state === 'pending') ||
+    (evidence.state === 'disputed' && nowSeconds >= disputeTerminalAt(packet))
+  )
   return `<div class="stage"><div class="stage__heading"><span>04</span><div><h3>Imported authority moves value</h3><p>No button manufactures a party signature.</p></div></div>
     ${localRoles.map(role => `<article class="outcome-maker"><h4>Sign as ${esc(contract.offer.terms.labels[role])}</h4><div class="outcome-actions"><button data-sign-outcome="complete" data-sign-role="${role}">Complete</button><button class="secondary" data-sign-outcome="mutual_cancel" data-sign-role="${role}">Mutual cancel</button><button class="danger" data-sign-outcome="${role}_cancel" data-sign-role="${role}">I self-cancel</button><button class="secondary" data-sign-outcome="dispute" data-sign-role="${role}">Raise dispute</button></div></article>`).join('')}
-    ${hasDispute && localArbiter(contract.offer) ? `<form data-create-decision class="decision-form"><h4>Arbiter decision</h4><label>Resolution<select name="resolution"><option value="refund_both">Refund both</option><option value="award_party_a">Award ${esc(contract.offer.terms.labels.party_a)}</option><option value="award_party_b">Award ${esc(contract.offer.terms.labels.party_b)}</option></select></label><label>Reason<select name="reason"><option value="no_show">No show</option><option value="service_failure">Service failure</option><option value="safety">Safety</option><option value="other">Other</option></select></label><label>Evidence summary<textarea name="evidence" required></textarea></label><button>Sign challenge-delayed decision</button></form>` : ''}
+    ${evidence.state === 'disputed' && localArbiter(contract.offer) ? `<form data-create-decision class="decision-form"><h4>Arbiter decision</h4><label>Resolution<select name="resolution"><option value="refund_both">Refund both</option><option value="award_party_a">Award ${esc(contract.offer.terms.labels.party_a)}</option><option value="award_party_b">Award ${esc(contract.offer.terms.labels.party_b)}</option></select></label><label>Reason<select name="reason"><option value="no_show">No show</option><option value="service_failure">Service failure</option><option value="safety">Safety</option><option value="other">Other</option></select></label><label>Evidence summary<textarea name="evidence" required></textarea></label><button>Sign challenge-delayed decision</button></form>` : ''}
     ${contract.record.decision ? `<textarea readonly>${esc(contract.record.decision)}</textarea><div class="button-row"><button class="secondary" data-copy="${esc(contract.record.decision)}">Copy decision</button><button class="secondary" data-share-kind="message" data-share="${esc(contract.record.decision)}">Copy decision link</button></div>` : ''}
     ${localArbiter(contract.offer) && evidence.state === 'executable' && activation?.active ? `<button data-settle-contract>Execute ${esc(evidence.resolution.replaceAll('_', ' '))} into signed payout targets</button>` : ''}
     ${localArbiter(contract.offer) && setupExpired && heldCount > 0 && !activation?.active ? '<button class="secondary" data-abort-setup>Setup expired · refund every funded but unactivated side</button>' : ''}
-    ${localArbiter(contract.offer) && contractExpired && activation?.active && evidence.state === 'pending' ? '<button class="secondary" data-timeout-contract>Settlement window expired · refund both</button>' : ''}
+    ${localArbiter(contract.offer) && canTimeout ? `<button class="secondary" data-timeout-contract>${esc(timeoutLabel)}</button>` : ''}
     ${settlementRows ? `<div class="payouts"><h3>Arbiter-signed settlement notices</h3><ul>${settlementRows}</ul></div>` : ''}
   </div>`
 }

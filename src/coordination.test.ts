@@ -161,6 +161,24 @@ describe('superseded policy handling', () => {
     expect(() => signContractOffer(terms, arbiter.secretHex)).toThrow('must use bilateral-arbiter-v2')
   })
 
+  it('refuses to enter a contract under a superseded policy, decodable or not', () => {
+    const arbiter = createIdentity()
+    const party = createIdentity()
+    const encoded = signOfferWithPolicy({id: 'bilateral-arbiter-v1', version: 1, challengeSeconds: 300}, arbiter.secretHex, arbiter.pubkey)
+    const offer = decodeContractMessage(encoded)
+    if (offer.type !== 'contract_offer') throw new Error('unreachable')
+    // Decoding is deliberately still allowed; accepting and packaging are not.
+    expect(() => signAcceptance(offer, 'party_a', {
+      party_a: outputHashOf(randomSecretHex()),
+      party_b: outputHashOf(randomSecretHex())
+    }, party.secretHex)).toThrow('superseded')
+    expect(() => encodeContractPacket({
+      offer,
+      acceptances: {} as never,
+      bondRequests: {} as never
+    })).toThrow('superseded')
+  })
+
   it('refuses an offer whose policy id and version disagree', () => {
     const arbiter = createIdentity()
     const encoded = signOfferWithPolicy({id: 'bilateral-arbiter-v1', version: 2, challengeSeconds: 300} as unknown as BilateralPolicy, arbiter.secretHex, arbiter.pubkey)

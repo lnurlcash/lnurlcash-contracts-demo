@@ -342,6 +342,7 @@ export const signContractOffer = (termsInput: ContractTerms, arbiterSecretHex: s
 }
 
 export const signAcceptance = (offer: SignedContractOffer, role: PartyRole, payoutHashes: Record<PartyRole, string>, signerSecretHex: string): SignedAcceptance => {
+  assertCurrentPolicy(offer)
   if (PARTY_ROLES.some(source => !HEX_32.test(payoutHashes[source]))) throw new Error('Each beneficiary payout hash must be 32 bytes.')
   if (payoutHashes.party_a === payoutHashes.party_b) throw new Error('A participant must use a different payout target for each source bond.')
   const body = {v: 1, offerId: offer.event.id, contractId: offer.terms.contractId, role, payoutHashes}
@@ -622,6 +623,15 @@ export const assertOfferOpen = (offer: SignedContractOffer, nowSeconds = Math.fl
   if (nowSeconds > offer.terms.setupExpires) throw new Error('The contract setup window has closed.')
 }
 
+// A superseded offer stays decodable so a contract already under way can be
+// resolved. Nobody may enter a new one: accepting or packaging a v1 offer would
+// bind a party to a signed policy this build no longer settles by.
+export const assertCurrentPolicy = (offer: SignedContractOffer): void => {
+  if (offer.terms.policy.id !== CURRENT_POLICY_ID) {
+    throw new Error(`This offer uses the superseded ${offer.terms.policy.id} policy. New contracts must use ${CURRENT_POLICY_ID}.`)
+  }
+}
+
 export const assertAcceptance = (acceptance: SignedAcceptance, offer: SignedContractOffer): void => {
   if (acceptance.offerId !== offer.event.id || acceptance.contractId !== offer.terms.contractId) throw new Error('The acceptance belongs to another offer.')
   if (acceptance.event.pubkey !== offer.terms.participants[acceptance.role]) throw new Error('The acceptance signer is not the named party.')
@@ -655,6 +665,7 @@ export const encodeContractPacket = (args: {
   acceptances: Record<PartyRole, SignedAcceptance>
   bondRequests: Record<PartyRole, SignedRequest>
 }): string => {
+  assertCurrentPolicy(args.offer)
   assertAcceptancePair(args.acceptances, args.offer)
   for (const role of PARTY_ROLES) assertRequestForRole(args.bondRequests[role], role, args.offer)
   const body: PacketBody = {
