@@ -56,7 +56,7 @@ For a real transfer, create an exact-value disposable note in Notecase or anothe
 
 See [THREAT-MODEL.md](THREAT-MODEL.md) and [ADVERSARIAL-REVIEW.md](ADVERSARIAL-REVIEW.md) for the current verdict and remaining acceptance gates.
 
-Arbiter custody is not a design choice that better client code can undo. An output hash must be published before funding, so exactly one entity knows each spend secret. [docs/CONDITIONAL-OUTPUTS-PROPOSAL.md](docs/CONDITIONAL-OUTPUTS-PROPOSAL.md) sets out why thresholds cannot sit on a hash-lock, and what a mint would have to enforce instead.
+Arbiter custody is not a design choice that better client code can undo. An output hash must be published before funding, so exactly one entity knows each spend secret. [docs/CONDITIONAL-OUTPUTS-PROPOSAL.md](docs/CONDITIONAL-OUTPUTS-PROPOSAL.md) sets out why thresholds cannot sit on a hash-lock, and argues that the answer is the `locked notes` option already on the [lnurlcash-conformance](https://github.com/TheCryptoDonkey/lnurlcash-conformance) threat scorecard, generalised with a threshold and a timelock.
 
 ## Hosting
 
