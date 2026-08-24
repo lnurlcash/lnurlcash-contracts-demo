@@ -427,7 +427,7 @@ const recoveryHtml = (): string => {
 const render = (): void => {
   app.innerHTML = `<header class="hero"><div class="hero__mark" aria-hidden="true">CC</div><div><p class="eyebrow">LNURLCASH CONTRACTS LAB</p><h1>Real sats. Explicit authority.</h1><p class="lede">A live protocol lab for recipient-owned payments and portable bilateral commitments. The arbiter is still a custodian; the parties are no longer simulated.</p><p class="custody-note">“Real sats” means live bearer liabilities at a mint. Keep every experiment tiny and disposable.</p></div><span class="live-pill"><i></i> remote protocol v2</span></header>
   <main>${handoffHtml()}<section class="truth-grid"><article><span>01</span><h2>Neutral core</h2><p>Party A, Party B and arbiter. Human labels are signed display terms, never authority.</p></article><article><span>02</span><h2>Separate authority</h2><p>Each person enrols, accepts, funds and signs outcomes on their own device.</p></article><article><span>03</span><h2>Private payouts</h2><p>Beneficiaries precommit two unique output hashes. The arbiter never learns those spend secrets.</p></article></section>${directHtml()}${contractHtml()}<section class="attack-lab"><div><p class="eyebrow">ATTACK LAB</p><h2>What now fails closed</h2></div><ul><li><b>Relabel a role:</b> authority follows neutral signed roles, not display text.</li><li><b>Invent acceptance or outcomes:</b> imported events must come from exact enrolled keys.</li><li><b>Donate anonymously:</b> activation needs both mint outputs and named-payer acknowledgements.</li><li><b>Swap a payout:</b> every input uses a distinct hash countersigned before funding.</li><li><b>Replay another contract:</b> messages bind offer id and exact bond-set hash.</li><li><b>Use silence as guilt:</b> silence freezes; an attributable decision waits through the signed challenge period.</li><li><b>Malicious arbiter or JavaScript:</b> still able to steal held bonds before settlement. That remains the hard custody boundary.</li></ul></section>${recoveryHtml()}</main>
-  <footer><span>Experimental · bilateral-arbiter-v1 · 500 sat hard cap</span><button class="text-button" data-reset>Erase this browser’s v2 secrets</button></footer><div data-status class="status" role="status" aria-live="polite">Ready. Use tiny disposable notes only.</div>`
+  <footer><span>Experimental · bilateral-arbiter-v2 · 500 sat hard cap</span><button class="text-button" data-reset>Erase this browser’s v2 secrets</button></footer><div data-status class="status" role="status" aria-live="polite">Ready. Use tiny disposable notes only.</div>`
   bind()
 }
 
@@ -641,7 +641,7 @@ const bind = (): void => {
       setupExpires: now + 15 * 60,
       serviceStarts,
       settlementExpires: serviceStarts + Number(data.get('settlementHours')) * 3600,
-      policy: {id: 'bilateral-arbiter-v1', version: 1, challengeSeconds: Number(data.get('challenge'))}
+      policy: {id: 'bilateral-arbiter-v2', version: 2, challengeSeconds: Number(data.get('challenge'))}
     }
     const offer = signContractOffer(terms, arbiter.secretHex)
     normaliseContract(offer.event.id, offer.encoded)

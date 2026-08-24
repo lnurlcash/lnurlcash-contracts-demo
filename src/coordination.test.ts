@@ -1,5 +1,8 @@
 import {describe, expect, it} from 'vitest'
+import {finalizeEvent} from 'nostr-tools'
 import {
+  CONTRACT_OFFER_KIND,
+  MESSAGE_PREFIX,
   assertAcceptance,
   assertArbiterDecision,
   assertFundingAcknowledgement,
@@ -21,7 +24,8 @@ import {
   type ContractPacket
 } from './coordination'
 import {createIdentity, outputHashOf, randomId, randomSecretHex, signRequest, type CommitmentIntent} from './protocol'
-import type {ContractTerms, PartyRole} from './contract-types'
+import {hexToBytes} from '@noble/hashes/utils.js'
+import type {BilateralPolicy, ContractTerms, PartyRole} from './contract-types'
 
 const mint = {
   host: 'mint.forgesworn.dev',
@@ -47,7 +51,7 @@ const fixture = () => {
     setupExpires: now + 600,
     serviceStarts: now + 3600,
     settlementExpires: now + 86_400,
-    policy: {id: 'bilateral-arbiter-v1', version: 1, challengeSeconds: 300}
+    policy: {id: 'bilateral-arbiter-v2', version: 2, challengeSeconds: 300}
   }
   const offer = signContractOffer(terms, arbiter.secretHex)
   const secrets = {
@@ -84,6 +88,85 @@ const fixture = () => {
   const packet = decodeContractPacket(encoded)
   return {partyA, partyB, arbiter, offer, acceptances, bondRequests, encoded, packet, secrets}
 }
+
+// A superseded offer can only be produced by signing it the way an older build
+// did, so build the event directly rather than through signContractOffer.
+const signOfferWithPolicy = (policy: BilateralPolicy, arbiterSecretHex: string, arbiterPubkey: string): string => {
+  const now = Math.floor(Date.now() / 1000)
+  const terms: ContractTerms = {
+    v: 1,
+    contractId: randomId(),
+    template: 'delivery',
+    title: 'Deliver one parcel',
+    memo: '',
+    labels: {party_a: 'Customer', party_b: 'Courier', arbiter: 'Dispatch arbiter'},
+    participants: {party_a: createIdentity().pubkey, party_b: createIdentity().pubkey, arbiter: arbiterPubkey},
+    bonds: {party_a: '11', party_b: '17'},
+    mint,
+    setupExpires: now + 600,
+    serviceStarts: now + 3600,
+    settlementExpires: now + 86_400,
+    policy
+  }
+  const event = finalizeEvent({
+    kind: CONTRACT_OFFER_KIND,
+    created_at: now,
+    tags: [
+      ['d', terms.contractId],
+      ['t', 'cash-contract-offer'],
+      ['policy', terms.policy.id, String(terms.policy.version)],
+      ['template', terms.template],
+      ['p', terms.participants.party_a, 'party_a'],
+      ['p', terms.participants.party_b, 'party_b'],
+      ['p', terms.participants.arbiter, 'arbiter'],
+      ['amount', terms.bonds.party_a, 'sat', 'party_a'],
+      ['amount', terms.bonds.party_b, 'sat', 'party_b'],
+      ['mint', terms.mint.host]
+    ],
+    content: JSON.stringify(terms)
+  }, hexToBytes(arbiterSecretHex))
+  return MESSAGE_PREFIX + btoa(JSON.stringify(event)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/u, '')
+}
+
+describe('superseded policy handling', () => {
+  it('still decodes a v1 offer so an in-flight contract can be resolved', () => {
+    const arbiter = createIdentity()
+    const encoded = signOfferWithPolicy({id: 'bilateral-arbiter-v1', version: 1, challengeSeconds: 300}, arbiter.secretHex, arbiter.pubkey)
+    const decoded = decodeContractMessage(encoded)
+    expect(decoded.type).toBe('contract_offer')
+    if (decoded.type !== 'contract_offer') throw new Error('unreachable')
+    expect(decoded.terms.policy).toEqual({id: 'bilateral-arbiter-v1', version: 1, challengeSeconds: 300})
+  })
+
+  it('refuses to issue any new offer under a superseded policy', () => {
+    const partyA = createIdentity()
+    const partyB = createIdentity()
+    const arbiter = createIdentity()
+    const now = Math.floor(Date.now() / 1000)
+    const terms: ContractTerms = {
+      v: 1,
+      contractId: randomId(),
+      template: 'delivery',
+      title: 'Deliver one parcel',
+      memo: '',
+      labels: {party_a: 'Customer', party_b: 'Courier', arbiter: 'Dispatch arbiter'},
+      participants: {party_a: partyA.pubkey, party_b: partyB.pubkey, arbiter: arbiter.pubkey},
+      bonds: {party_a: '11', party_b: '17'},
+      mint,
+      setupExpires: now + 600,
+      serviceStarts: now + 3600,
+      settlementExpires: now + 86_400,
+      policy: {id: 'bilateral-arbiter-v1', version: 1, challengeSeconds: 300}
+    }
+    expect(() => signContractOffer(terms, arbiter.secretHex)).toThrow('must use bilateral-arbiter-v2')
+  })
+
+  it('refuses an offer whose policy id and version disagree', () => {
+    const arbiter = createIdentity()
+    const encoded = signOfferWithPolicy({id: 'bilateral-arbiter-v1', version: 2, challengeSeconds: 300} as unknown as BilateralPolicy, arbiter.secretHex, arbiter.pubkey)
+    expect(() => decodeContractMessage(encoded)).toThrow('policy id and version disagree')
+  })
+})
 
 describe('portable bilateral coordination', () => {
   it('uses signed neutral-role enrolments rather than trusting pasted public keys', () => {

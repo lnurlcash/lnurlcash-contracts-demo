@@ -26,7 +26,7 @@ The lab now demonstrates a generic, remotely coordinated bilateral commitment pr
 - Contract ids contain 128 random bits.
 - `party_a`, `party_b` and `arbiter` are wire authority. Template labels have no authority.
 - Every event has a strict body and exact ordered tags; unknown fields and tags are refused.
-- Offers bind the exact keys, labels, template, values, mint trust root, setup and settlement windows, challenge period and `bilateral-arbiter-v1` policy.
+- Offers bind the exact keys, labels, template, values, mint trust root, setup and settlement windows, challenge period and `bilateral-arbiter-v2` policy.
 - All three keys must be different. Only the named arbiter signs the offer and bond requests.
 - Each party independently countersigns the exact offer id and two per-source payout hashes.
 - All four payout targets are distinct, preventing two source notes from colliding at one receiver hash.
@@ -35,7 +35,7 @@ The lab now demonstrates a generic, remotely coordinated bilateral commitment pr
 - Activation requires both participant funding acknowledgements and both outputs independently visible to the arbiter.
 - Outcomes, decisions, notices and payout acknowledgements bind both the exact offer and exact bond-set hash.
 - Completion and mutual cancellation require both parties. Self-cancellation can only be signed by the self-cancelling party.
-- Contradictory self-cancellations fail into dispute. A dispute freezes value.
+- Contradictory self-cancellations fail into dispute. A dispute freezes value until a decision executes or the terminal refund deadline passes.
 - Arbiter decisions contain a reason and evidence hash and cannot execute until the signed challenge period ends.
 - Setup timeout refunds every funded but unactivated side. Contract timeout refunds both active sides without assigning guilt when no dispute or executable authority exists.
 - Resolution is monotonic. Another contract, resolution or output hash cannot replace a staged journal.
@@ -77,7 +77,7 @@ The three-profile test proves copy/paste and fragment hand-off. It does not prov
 
 ### A8. Public source reproducibility
 
-The local repository has no configured public remote. Deployment records include commit and asset hashes, but an independent developer cannot yet fetch the exact source commit from a public origin. That is a release-transparency gap, not a cryptographic protocol gap.
+The repository is public at `github.com/TheCryptoDonkey/lnurlcash-contracts-demo`, so the source commit can be fetched independently. What remains is reproducible build instructions that let a third party rebuild the published asset hashes from that commit. That is a release-transparency gap, not a cryptographic protocol gap.
 
 ## Smarter policy now implemented
 
@@ -88,6 +88,8 @@ The local repository has no configured public remote. Deployment records include
 - dispute freeze plus reasoned, evidence-hashed, challenge-delayed arbiter decisions;
 - setup refund based on activation rather than merely seeing two donated notes;
 - no-fault refund after the settlement window when nobody produced executable authority or a dispute;
+- contradictory self-cancellations treated as a dispute rather than an unrecoverable state;
+- a terminal no-fault refund one challenge period after settlement expiry, so no reachable state freezes value permanently;
 - durable, monotonic per-input settlement journals;
 - beneficiary acknowledgements that reconcile successful ambiguous settlement without target substitution.
 

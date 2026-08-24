@@ -11,8 +11,11 @@ import {
 } from './protocol'
 import {
   CONTRACT_TEMPLATES,
+  CURRENT_POLICY_ID,
   PARTY_ROLES,
+  POLICY_VERSIONS,
   isPartyRole,
+  type BilateralPolicy,
   type ContractTerms,
   type PartyRole
 } from './contract-types'
@@ -236,7 +239,8 @@ const validateTerms = (value: unknown, createdAt: number): ContractTerms => {
   if (settlementExpires <= serviceStarts || settlementExpires - serviceStarts > MAX_SERVICE_WINDOW_SECONDS) throw new Error('Settlement expiry is outside the supported contract window.')
   const policy = objectOf(raw.policy, 'Contract policy')
   exactKeys(policy, ['id', 'version', 'challengeSeconds'], 'Contract policy')
-  if (policy.id !== 'bilateral-arbiter-v1' || policy.version !== 1) throw new Error('Unsupported contract policy.')
+  if (typeof policy.id !== 'string' || POLICY_VERSIONS[policy.id] === undefined) throw new Error('Unsupported contract policy.')
+  if (policy.version !== POLICY_VERSIONS[policy.id]) throw new Error('The contract policy id and version disagree.')
   const challengeSeconds = positiveInteger(policy.challengeSeconds, 'challengeSeconds')
   if (challengeSeconds < CHALLENGE_MIN_SECONDS || challengeSeconds > CHALLENGE_MAX_SECONDS) throw new Error('Challenge period must be between one minute and seven days.')
   return {
@@ -267,7 +271,7 @@ const validateTerms = (value: unknown, createdAt: number): ContractTerms => {
     setupExpires,
     serviceStarts,
     settlementExpires,
-    policy: {id: 'bilateral-arbiter-v1', version: 1, challengeSeconds}
+    policy: {id: policy.id, version: policy.version, challengeSeconds} as BilateralPolicy
   }
 }
 
@@ -329,6 +333,9 @@ export const signEnrolment = (role: PartyRole, signerSecretHex: string): SignedE
 export const signContractOffer = (termsInput: ContractTerms, arbiterSecretHex: string): SignedContractOffer => {
   const createdAt = Math.floor(Date.now() / 1000)
   const terms = validateTerms(termsInput, createdAt)
+  // Superseded policies stay decodable so contracts already under way can still
+  // resolve. They must never be issued again.
+  if (terms.policy.id !== CURRENT_POLICY_ID) throw new Error(`New offers must use ${CURRENT_POLICY_ID}.`)
   const event = finalizeEvent({kind: CONTRACT_OFFER_KIND, created_at: createdAt, tags: tagsForOffer(terms), content: JSON.stringify(terms)}, hexToBytes(arbiterSecretHex))
   if (event.pubkey !== terms.participants.arbiter) throw new Error('Only the named arbiter may sign the contract offer.')
   return {type: 'contract_offer', terms, event, encoded: MESSAGE_PREFIX + encodeBase64Url(JSON.stringify(event))}

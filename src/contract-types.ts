@@ -17,11 +17,18 @@ export type MintTrust = {
   mintPubkey?: string
 }
 
-export type BilateralPolicy = {
-  id: 'bilateral-arbiter-v1'
-  version: 1
-  challengeSeconds: number
-}
+// v1 offers remain decodable so an in-flight contract can still be resolved.
+// Only v2 may be created: see CURRENT_POLICY_ID and signContractOffer.
+export type BilateralPolicy =
+  | {id: 'bilateral-arbiter-v1'; version: 1; challengeSeconds: number}
+  | {id: 'bilateral-arbiter-v2'; version: 2; challengeSeconds: number}
+
+export const CURRENT_POLICY_ID = 'bilateral-arbiter-v2' as const
+
+export const POLICY_VERSIONS: Readonly<Record<string, number>> = Object.freeze({
+  'bilateral-arbiter-v1': 1,
+  'bilateral-arbiter-v2': 2
+})
 
 export type ContractTerms = {
   v: 1

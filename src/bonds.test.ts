@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest'
 import {
   applyPayoutAcknowledgement,
   contractActivationState,
+  disputeTerminalAt,
   evaluateResolutionEvidence,
   resolveHeldCommitments
 } from './bonds'
@@ -46,7 +47,7 @@ const fixture = (options: {fundedA?: boolean; fundedB?: boolean; expires?: numbe
     setupExpires: options.expires ?? now + 600,
     serviceStarts: now + 3600,
     settlementExpires: now + 86_400,
-    policy: {id: 'bilateral-arbiter-v1', version: 1, challengeSeconds: 60}
+    policy: {id: 'bilateral-arbiter-v2', version: 2, challengeSeconds: 60}
   }
   const offer = signContractOffer(terms, arbiter.secretHex)
   const payoutSecrets = {
@@ -243,6 +244,52 @@ describe('beneficiary-owned settlement', () => {
     await expect(resolveHeldCommitments(store, packet, {kind: 'contract_timeout', outcomes: [dispute.encoded]}, {
       persist: () => undefined, redirect: confirmedRedirect, nowSeconds: packet.offer.terms.settlementExpires + 1
     })).rejects.toThrow('still requires attributable resolution')
+    expect(store.settlements).toHaveLength(0)
+  })
+
+  it('lets an arbiter decision resolve contradictory self-cancellations', () => {
+    const {packet, partyA, partyB, arbiter} = fixture()
+    const a = signOutcomeStatement(packet, 'party_a_cancel', partyA.secretHex)
+    const b = signOutcomeStatement(packet, 'party_b_cancel', partyB.secretHex)
+    const decision = signArbiterDecision(packet, 'refund_both', outputHashOf(randomSecretHex()), 'other', arbiter.secretHex)
+    const outcomes = [a.encoded, b.encoded]
+    expect(evaluateResolutionEvidence(packet, outcomes)).toEqual({state: 'disputed'})
+    expect(evaluateResolutionEvidence(packet, outcomes, decision.encoded, decision.event.created_at + 59)).toMatchObject({state: 'disputed'})
+    expect(evaluateResolutionEvidence(packet, outcomes, decision.encoded, decision.event.created_at + 60))
+      .toMatchObject({state: 'executable', resolution: 'refund_both'})
+  })
+
+  it('lets both parties agree their way out of contradictory self-cancellations', () => {
+    const {packet, partyA, partyB} = fixture()
+    const a = signOutcomeStatement(packet, 'party_a_cancel', partyA.secretHex)
+    const b = signOutcomeStatement(packet, 'party_b_cancel', partyB.secretHex)
+    const cancelA = signOutcomeStatement(packet, 'mutual_cancel', partyA.secretHex)
+    const cancelB = signOutcomeStatement(packet, 'mutual_cancel', partyB.secretHex)
+    expect(evaluateResolutionEvidence(packet, [a.encoded, b.encoded, cancelA.encoded, cancelB.encoded]))
+      .toMatchObject({state: 'executable', resolution: 'mutual_cancel'})
+  })
+
+  it('refunds a dispute no-fault once the challenge period can no longer produce a decision', async () => {
+    const {store, packet, partyA} = fixture()
+    const dispute = signOutcomeStatement(packet, 'dispute', partyA.secretHex)
+    const terminal = disputeTerminalAt(packet)
+    expect(terminal).toBe(packet.offer.terms.settlementExpires + packet.offer.terms.policy.challengeSeconds)
+    await expect(resolveHeldCommitments(store, packet, {kind: 'contract_timeout', outcomes: [dispute.encoded]}, {
+      persist: () => undefined, redirect: confirmedRedirect, nowSeconds: terminal - 1
+    })).rejects.toThrow('still requires attributable resolution')
+    await resolveHeldCommitments(store, packet, {kind: 'contract_timeout', outcomes: [dispute.encoded]}, {
+      persist: () => undefined, redirect: confirmedRedirect, nowSeconds: terminal
+    })
+    expect(store.settlements.map(item => item.beneficiary)).toEqual(['party_a', 'party_b'])
+  })
+
+  it('never lets the terminal refund override an executable decision', async () => {
+    const {store, packet, partyA, arbiter} = fixture()
+    const dispute = signOutcomeStatement(packet, 'dispute', partyA.secretHex)
+    const decision = signArbiterDecision(packet, 'award_party_a', outputHashOf(randomSecretHex()), 'no_show', arbiter.secretHex)
+    await expect(resolveHeldCommitments(store, packet, {kind: 'contract_timeout', outcomes: [dispute.encoded], decision: decision.encoded}, {
+      persist: () => undefined, redirect: confirmedRedirect, nowSeconds: disputeTerminalAt(packet)
+    })).rejects.toThrow('Executable signed authority exists')
     expect(store.settlements).toHaveLength(0)
   })
 

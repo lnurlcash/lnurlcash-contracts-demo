@@ -17,13 +17,17 @@ The v2 lab fixes one reusable policy for Party A and Party B:
 | A self-cancels | A | forfeit to B | refund B |
 | B self-cancels | B | refund A | forfeit to A |
 | Dispute | either party | freeze | freeze |
+| Dispute unresolved past the challenge deadline | contract timeout | refund A | refund B |
 | Arbiter awards A | arbiter after challenge | pay A | pay A |
 | Arbiter awards B | arbiter after challenge | pay B | pay B |
 | Arbiter refunds both | arbiter after challenge | refund A | refund B |
 | Setup never activates | setup timeout | refund funded A | refund funded B |
 | No outcome by settlement expiry | contract timeout | refund A | refund B |
 
-Silence never identifies a guilty party. It can eventually produce a no-fault refund only when nobody raised a dispute or supplied executable signed authority.
+Silence never identifies a guilty party. Where nobody raised a dispute or supplied executable
+signed authority, the settlement deadline produces a no-fault refund. Where a dispute was raised
+but no decision could still be signed, the same no-fault refund follows one challenge period later,
+so a freeze is always bounded.
 
 Ride, delivery, booking and contracted work change labels and commercial evidence, not this settlement table. A materially different rule requires a new policy id and new acceptance.
 
@@ -58,7 +62,7 @@ Illustrative policy shape only:
 
 ```json
 {
-  "policy": "bilateral-arbiter-v1",
+  "policy": "bilateral-arbiter-v2",
   "contract": "<canonical-offer-id>",
   "inputs": ["party_a_bond", "party_b_bond"],
   "branches": {
@@ -76,3 +80,6 @@ Illustrative policy shape only:
 ```
 
 That is not a proposed wire format. The hard work is consensus over branch semantics, output commitment, federation, clocks, recovery and upgrade safety.
+
+A fuller draft, including the impossibility argument, fail-closed capability negotiation and a
+conformance suite, is in [CONDITIONAL-OUTPUTS-PROPOSAL.md](CONDITIONAL-OUTPUTS-PROPOSAL.md).

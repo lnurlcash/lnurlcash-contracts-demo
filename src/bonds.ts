@@ -118,8 +118,11 @@ export const evaluateResolutionEvidence = (
 ): EvidenceState => {
   const statements = importedOutcomes(outcomeInputs, packet)
   const selfCancels = statements.filter(({statement}) => ['party_a_cancel', 'party_b_cancel'].includes(statement.outcome))
-  if (new Set(selfCancels.map(({statement}) => statement.outcome)).size > 1) return {state: 'disputed'}
-  if (selfCancels.length) {
+  // Contradictory admissions are a dispute, not a terminal state. Returning here
+  // would make every later branch unreachable, so no decision, no bilateral
+  // agreement and no timeout could ever move the held bonds again.
+  const contradictory = new Set(selfCancels.map(({statement}) => statement.outcome)).size > 1
+  if (!contradictory && selfCancels.length) {
     const selected = selfCancels[0]!.statement
     return {state: 'executable', resolution: selected.outcome as 'party_a_cancel' | 'party_b_cancel', authorityIds: [selected.event.id]}
   }
@@ -130,7 +133,8 @@ export const evaluateResolutionEvidence = (
     if (roles.size === 2) return {state: 'executable', resolution: outcome, authorityIds: matching.map(({statement}) => statement.event.id)}
   }
 
-  const disputed = statements.some(({statement}) => statement.outcome === 'dispute')
+  const disputeStatements = statements.filter(({statement}) => statement.outcome === 'dispute')
+  const disputed = contradictory || disputeStatements.length > 0
   if (decisionInput) {
     const message = decodeContractMessage(decisionInput, 0)
     if (message.type !== 'arbiter_decision') throw new Error('Stored decision authority is not an arbiter decision.')
@@ -138,13 +142,21 @@ export const evaluateResolutionEvidence = (
     if (!disputed) throw new Error('An arbiter decision cannot create a dispute that neither party raised.')
     const challengeEnds = decisionExecutableAt(message, packet.offer)
     if (nowSeconds < challengeEnds) return {state: 'disputed', challengeEnds, decision: message}
-    return {state: 'executable', resolution: message.resolution, authorityIds: [message.event.id, ...statements.filter(({statement}) => statement.outcome === 'dispute').map(({statement}) => statement.event.id)]}
+    const raisedBy = disputeStatements.length ? disputeStatements : selfCancels
+    return {state: 'executable', resolution: message.resolution, authorityIds: [message.event.id, ...raisedBy.map(({statement}) => statement.event.id)]}
   }
   if (disputed) return {state: 'disputed'}
 
   const unilateral = statements.find(({statement}) => ['complete', 'mutual_cancel'].includes(statement.outcome))
   return {state: 'pending', reason: unilateral ? 'The other party has not signed the matching outcome.' : 'No executable outcome authority has been imported.'}
 }
+
+// A dispute freezes value until an attributable decision executes. Without a
+// terminal deadline that freeze is permanent: no decision or outcome statement
+// can be signed after the settlement window, so a merely late arbiter would
+// strand both bonds forever. After this instant the contract refunds no-fault.
+export const disputeTerminalAt = (packet: ContractPacket): number =>
+  packet.offer.terms.settlementExpires + packet.offer.terms.policy.challengeSeconds
 
 const allSettlementsFor = (store: DemoStore, requestId: string): StoredSettlement[] => store.settlements.filter(item => item.bondRequestId === requestId)
 
@@ -186,8 +198,12 @@ export const resolveHeldCommitments = async (
   } else if (authority.kind === 'contract_timeout') {
     if (now < packet.offer.terms.settlementExpires) throw new Error('The contract settlement deadline has not passed yet.')
     const evidence = evaluateResolutionEvidence(packet, authority.outcomes, authority.decision, now)
-    if (evidence.state === 'disputed') throw new Error('A dispute was raised before timeout and still requires attributable resolution.')
+    // Executable authority is checked first so a decision that becomes executable
+    // exactly at the terminal deadline still wins over the no-fault refund.
     if (evidence.state === 'executable') throw new Error('Executable signed authority exists; contract timeout cannot replace it.')
+    if (evidence.state === 'disputed' && now < disputeTerminalAt(packet)) {
+      throw new Error('A dispute was raised before timeout and still requires attributable resolution.')
+    }
     resolution = 'contract_timeout'
   } else {
     const evidence = evaluateResolutionEvidence(packet, authority.outcomes, authority.decision, now)

@@ -36,13 +36,18 @@ Every object is a complete Nostr event with an exact tag set and a strict JSON b
 | Party A self-cancels | A statement | forfeit to B | refund B |
 | Party B self-cancels | B statement | refund A | forfeit to A |
 | Dispute | either party | freeze | freeze |
+| Dispute unresolved one challenge period past settlement expiry | signed timeout policy | refund A | refund B |
 | Arbiter awards A | arbiter decision after challenge | pay A | pay A |
 | Arbiter awards B | arbiter decision after challenge | pay B | pay B |
 | Arbiter refunds both | arbiter decision after challenge | refund A | refund B |
 | Setup expires before full activation | signed timeout policy | refund any funded side | refund any funded side |
 | No outcome before settlement expiry | signed timeout policy | refund A | refund B |
 
-Silence never selects a losing party.
+Silence never selects a losing party. A dispute freezes value, but not forever: no outcome
+statement or decision can be signed after the settlement window, so an unresolved dispute
+refunds both sides once one further challenge period has elapsed. Contradictory
+self-cancellations are treated as a dispute rather than a terminal state, so an arbiter
+decision — or the two parties simply agreeing — can still resolve them.
 
 ## Activation invariant
 
@@ -64,16 +69,27 @@ An ambiguous mutation response is journalled against that same output hash. It i
 
 The arbiter can still steal before redirecting because it knows each held bond secret. Preventing that requires mint-enforced conditions or threshold custody; browser messages cannot manufacture that property.
 
-## Policy version 1
+## Policy version 2
 
-`bilateral-arbiter-v1` fixes these rules:
+`bilateral-arbiter-v2` fixes these rules:
 
 - complete and mutual cancel require both parties;
 - self-cancellation is unilateral and forfeits only the canceller's bond;
-- disputes freeze until a signed decision becomes executable;
+- disputes freeze until a signed decision becomes executable, and refund no-fault if none can still be signed;
 - setup timeout refunds whichever side actually funded;
 - settlement authority commits to inputs and beneficiary output hashes;
 - contract ids are 128 random bits;
 - every transfer remains capped at 500 sats in this public lab.
 
 New semantics require a new policy id or version. A UI label, template or memo cannot silently change settlement behaviour.
+
+`bilateral-arbiter-v2` supersedes `bilateral-arbiter-v1`. A v1 offer still decodes, so a contract
+already under way can be resolved, but no new v1 offer can be issued. Version 1 contained two
+reachable states in which no signed authority could ever move the held bonds:
+contradictory self-cancellations returned a terminal result before any decision or bilateral
+agreement was read, and a dispute that received no decision inside the settlement window could
+never be resolved or timed out. Version 2 adds the terminal refund and treats contradictory
+admissions as an ordinary dispute. No outcome that was executable under version 1 resolves
+differently under version 2; only states that were previously stuck became reachable. That is why
+existing v1 contracts resolve under the version 2 rules: the change can only free value that was
+otherwise lost, so no party accepting v1 is disadvantaged by it.
