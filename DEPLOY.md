@@ -4,22 +4,24 @@
 
 - `labs.moneyer.dev` has an A record for `2.29.14.244`.
 - `https://labs.moneyer.dev` is live; plain HTTP redirects to HTTPS.
-- Release commit: `383968ff110e`.
-- Static release: `/opt/moneyer-labs/releases/20260823T101650Z-383968ff110e`.
+- Release commit: `586b16adb377`.
+- Static release: `/opt/moneyer-labs/releases/20260824T095834Z-586b16adb377`.
 - Live symlink: `/opt/moneyer-labs/current`.
-- Pre-deployment Caddy backup: `/etc/caddy/Caddyfile.bak-labs-20260823T090338Z-7fcfa3069746`.
-- Immediate static rollback: `/opt/moneyer-labs/releases/20260823T090338Z-7fcfa3069746`.
+- Caddy configuration unchanged at this release; the live `labs.moneyer.dev` vhost is byte-identical to `deploy/labs.moneyer.dev.Caddyfile`, so no reload was performed.
+- Immediate static rollback: `/opt/moneyer-labs/releases/20260823T101650Z-383968ff110e`.
 
 The public files verified byte-for-byte after deployment:
 
 ```text
-b6b22ba07f0541282b8ad9aca53117fb39d9c9702b25907cf74550e7d9435837  index.html
+2f7faebccfcfe686fe76c72516b62c47f8aabe01c0eb232779fa1eedd2aa5faf  index.html
 2c16fbbcace9e2853d4aa125e24443d77ed8c92fb010e2fb4ea9035ac9ef2dcb  favicon.svg
 6f3517ee9ac05103bdd2bb5b0223acf4a2baac0d573e5ed617c6f5f40a833c4d  assets/index-BUoIhlzZ.css
-9b80b8c94d4da060e52461a3abc946894938c41648611b58feef4b3a3d8f308a  assets/index-D-S_i_Gq.js
+ca547df131ee4d93a2eff02d3b527299eca4beff8d6cca7496a3f28d41798285  assets/index-D_FHp-bw.js
 ```
 
-The v2 release passed 46 tests, the production build, dependency audit, public-DNS and direct-origin HTTPS checks, and the three-profile remote ceremony against the live mint discovery endpoint. That ceremony moved no sats; the disposable-note funding and settlement matrix remains an explicit acceptance gate in `ADVERSARIAL-REVIEW.md`.
+This release carries `bilateral-arbiter-v2`. It passed `npm ci` with no advisories, 56 tests, the production build, and a five-round independent security review whose findings are recorded in the commits between `3fe6925` and `586b16a`. After the switch, all four asset hashes were confirmed byte-for-byte from outside the origin, the superseded bundle returned 404, the certificate and every security header were re-checked, and the page rendered with no console errors and no request to any host other than `labs.moneyer.dev`.
+
+The three-profile remote ceremony and the disposable-note funding and settlement matrix have **not** been re-run against this release. They remain explicit acceptance gates in `ADVERSARIAL-REVIEW.md`, and this release changed settlement authority, so move no sats through it until they are satisfied.
 
 ## Static release layout
 
