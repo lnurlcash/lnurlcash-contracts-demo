@@ -402,6 +402,9 @@ export const signArbiterDecision = (
   delete (unsigned as Partial<typeof body>).v
   const signed = signEvent(ARBITER_DECISION_KIND, tagsForDecision(unsigned), body, arbiterSecretHex)
   if (signed.event.pubkey !== packet.offer.terms.participants.arbiter) throw new Error('Only the named arbiter may sign a decision.')
+  // assertArbiterDecision refuses anything signed past the settlement window.
+  // Signing it anyway would persist an event that fails every later validation.
+  if (signed.event.created_at > packet.offer.terms.settlementExpires) throw new Error('The settlement window has closed, so a decision signed now could never be executed.')
   return {type: 'arbiter_decision', ...unsigned, ...signed}
 }
 

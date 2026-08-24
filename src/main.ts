@@ -13,6 +13,7 @@ import {
 import {
   assertAcceptance,
   assertArbiterDecision,
+  assertCurrentPolicy,
   assertFundingAcknowledgement,
   assertOfferOpen,
   assertOutcomeStatement,
@@ -399,7 +400,7 @@ const outcomeHtml = (contract: NonNullable<ReturnType<typeof latestContract>>): 
   )
   return `<div class="stage"><div class="stage__heading"><span>04</span><div><h3>Imported authority moves value</h3><p>No button manufactures a party signature.</p></div></div>
     ${localRoles.map(role => `<article class="outcome-maker"><h4>Sign as ${esc(contract.offer.terms.labels[role])}</h4><div class="outcome-actions"><button data-sign-outcome="complete" data-sign-role="${role}">Complete</button><button class="secondary" data-sign-outcome="mutual_cancel" data-sign-role="${role}">Mutual cancel</button><button class="danger" data-sign-outcome="${role}_cancel" data-sign-role="${role}">I self-cancel</button><button class="secondary" data-sign-outcome="dispute" data-sign-role="${role}">Raise dispute</button></div></article>`).join('')}
-    ${evidence.state === 'disputed' && localArbiter(contract.offer) ? `<form data-create-decision class="decision-form"><h4>Arbiter decision</h4><label>Resolution<select name="resolution"><option value="refund_both">Refund both</option><option value="award_party_a">Award ${esc(contract.offer.terms.labels.party_a)}</option><option value="award_party_b">Award ${esc(contract.offer.terms.labels.party_b)}</option></select></label><label>Reason<select name="reason"><option value="no_show">No show</option><option value="service_failure">Service failure</option><option value="safety">Safety</option><option value="other">Other</option></select></label><label>Evidence summary<textarea name="evidence" required></textarea></label><button>Sign challenge-delayed decision</button></form>` : ''}
+    ${evidence.state === 'disputed' && !contractExpired && localArbiter(contract.offer) ? `<form data-create-decision class="decision-form"><h4>Arbiter decision</h4><label>Resolution<select name="resolution"><option value="refund_both">Refund both</option><option value="award_party_a">Award ${esc(contract.offer.terms.labels.party_a)}</option><option value="award_party_b">Award ${esc(contract.offer.terms.labels.party_b)}</option></select></label><label>Reason<select name="reason"><option value="no_show">No show</option><option value="service_failure">Service failure</option><option value="safety">Safety</option><option value="other">Other</option></select></label><label>Evidence summary<textarea name="evidence" required></textarea></label><button>Sign challenge-delayed decision</button></form>` : ''}
     ${contract.record.decision ? `<textarea readonly>${esc(contract.record.decision)}</textarea><div class="button-row"><button class="secondary" data-copy="${esc(contract.record.decision)}">Copy decision</button><button class="secondary" data-share-kind="message" data-share="${esc(contract.record.decision)}">Copy decision link</button></div>` : ''}
     ${localArbiter(contract.offer) && evidence.state === 'executable' && activation?.active ? `<button data-settle-contract>Execute ${esc(evidence.resolution.replaceAll('_', ' '))} into signed payout targets</button>` : ''}
     ${localArbiter(contract.offer) && setupExpired && heldCount > 0 && !activation?.active ? '<button class="secondary" data-abort-setup>Setup expired · refund every funded but unactivated side</button>' : ''}
@@ -706,6 +707,9 @@ const bind = (): void => {
     const contract = latestContract()
     if (!contract?.packet) throw new Error('Import the full contract packet first.')
     const livePacket = decodeContractPacket(contract.packet.encoded, Math.floor(Date.now() / 1000))
+    // A packet built by an older client bypasses the guards on acceptance and
+    // packaging, so refuse before the note moves rather than after.
+    assertCurrentPolicy(livePacket.offer)
     const local = store.identities[role]
     if (!local || local.pubkey !== livePacket.offer.terms.participants[role]) throw new Error('This browser does not own the named payer key.')
     const noteInput = String(formData(submitted).get('note'))
