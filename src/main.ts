@@ -1,7 +1,7 @@
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex} from '@noble/hashes/utils.js'
 import {fetchMintAddress, hashK1, noteK1, resolveNoteInput} from 'lnurlcash-kit'
-import {applyPayoutAcknowledgement, contractActivationState, disputeTerminalAt, evaluateResolutionEvidence, resolveHeldCommitments} from './bonds'
+import {applyPayoutAcknowledgement, contractActivationState, disputeTerminalAt, evaluateResolutionEvidence, hasTerminalRefund, resolveHeldCommitments} from './bonds'
 import {
   fundReceiverLockedRequest,
   receiveLockedPayment,
@@ -396,7 +396,7 @@ const outcomeHtml = (contract: NonNullable<ReturnType<typeof latestContract>>): 
     : 'Settlement window expired · refund both'
   const canTimeout = Boolean(activation?.active) && (
     (contractExpired && evidence.state === 'pending') ||
-    (evidence.state === 'disputed' && nowSeconds >= disputeTerminalAt(packet))
+    (evidence.state === 'disputed' && hasTerminalRefund(packet) && nowSeconds >= disputeTerminalAt(packet))
   )
   return `<div class="stage"><div class="stage__heading"><span>04</span><div><h3>Imported authority moves value</h3><p>No button manufactures a party signature.</p></div></div>
     ${localRoles.map(role => `<article class="outcome-maker"><h4>Sign as ${esc(contract.offer.terms.labels[role])}</h4><div class="outcome-actions"><button data-sign-outcome="complete" data-sign-role="${role}">Complete</button><button class="secondary" data-sign-outcome="mutual_cancel" data-sign-role="${role}">Mutual cancel</button><button class="danger" data-sign-outcome="${role}_cancel" data-sign-role="${role}">I self-cancel</button><button class="secondary" data-sign-outcome="dispute" data-sign-role="${role}">Raise dispute</button></div></article>`).join('')}

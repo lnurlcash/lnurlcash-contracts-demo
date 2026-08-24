@@ -3,6 +3,7 @@ import {
   applyPayoutAcknowledgement,
   contractActivationState,
   disputeTerminalAt,
+  hasTerminalRefund,
   evaluateResolutionEvidence,
   resolveHeldCommitments
 } from './bonds'
@@ -290,6 +291,20 @@ describe('beneficiary-owned settlement', () => {
     await expect(resolveHeldCommitments(store, packet, {kind: 'contract_timeout', outcomes: [dispute.encoded], decision: decision.encoded}, {
       persist: () => undefined, redirect: confirmedRedirect, nowSeconds: disputeTerminalAt(packet)
     })).rejects.toThrow('Executable signed authority exists')
+    expect(store.settlements).toHaveLength(0)
+  })
+
+  it('does not extend the terminal refund to a contract accepted under v1', async () => {
+    const {store, packet, partyA} = fixture()
+    const dispute = signOutcomeStatement(packet, 'dispute', partyA.secretHex)
+    expect(hasTerminalRefund(packet)).toBe(true)
+    // A v1 contract never agreed a terminal refund. Refunding both would leave a
+    // party who should have been awarded both bonds materially worse off.
+    const legacy = {...packet, offer: {...packet.offer, terms: {...packet.offer.terms, policy: {id: 'bilateral-arbiter-v1', version: 1, challengeSeconds: 60} as const}}}
+    expect(hasTerminalRefund(legacy)).toBe(false)
+    await expect(resolveHeldCommitments(store, legacy, {kind: 'contract_timeout', outcomes: [dispute.encoded]}, {
+      persist: () => undefined, redirect: confirmedRedirect, nowSeconds: disputeTerminalAt(legacy) + 10_000
+    })).rejects.toThrow('no terminal refund')
     expect(store.settlements).toHaveLength(0)
   })
 

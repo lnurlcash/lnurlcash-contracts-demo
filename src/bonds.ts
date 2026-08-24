@@ -14,7 +14,7 @@ import {
   type SignedPayoutAcknowledgement,
   type SignedSettlementNotice
 } from './coordination'
-import {PARTY_ROLES, type PartyRole} from './contract-types'
+import {CURRENT_POLICY_ID, PARTY_ROLES, type PartyRole} from './contract-types'
 import {decodeRequest, isCommitmentIntent, outputHashOf} from './protocol'
 import type {DemoStore, SettlementResolution, StoredRequest, StoredSettlement} from './store'
 
@@ -155,8 +155,16 @@ export const evaluateResolutionEvidence = (
 // terminal deadline that freeze is permanent: no decision or outcome statement
 // can be signed after the settlement window, so a merely late arbiter would
 // strand both bonds forever. After this instant the contract refunds no-fault.
+//
+// This is a v2 rule. A v1 contract has no such row in the table its parties
+// accepted, and a refund is not merely a safe default: a party who would have
+// been awarded both bonds is worse off under one. Superseded packets therefore
+// keep the v1 behaviour and stay frozen until a decision is imported.
 export const disputeTerminalAt = (packet: ContractPacket): number =>
   packet.offer.terms.settlementExpires + packet.offer.terms.policy.challengeSeconds
+
+export const hasTerminalRefund = (packet: ContractPacket): boolean =>
+  packet.offer.terms.policy.id === CURRENT_POLICY_ID
 
 const allSettlementsFor = (store: DemoStore, requestId: string): StoredSettlement[] => store.settlements.filter(item => item.bondRequestId === requestId)
 
@@ -201,8 +209,11 @@ export const resolveHeldCommitments = async (
     // Executable authority is checked first so a decision that becomes executable
     // exactly at the terminal deadline still wins over the no-fault refund.
     if (evidence.state === 'executable') throw new Error('Executable signed authority exists; contract timeout cannot replace it.')
-    if (evidence.state === 'disputed' && now < disputeTerminalAt(packet)) {
-      throw new Error('A dispute was raised before timeout and still requires attributable resolution.')
+    if (evidence.state === 'disputed') {
+      if (!hasTerminalRefund(packet)) {
+        throw new Error(`This contract was accepted under ${packet.offer.terms.policy.id}, which has no terminal refund. It stays frozen until a signed decision is imported.`)
+      }
+      if (now < disputeTerminalAt(packet)) throw new Error('A dispute was raised before timeout and still requires attributable resolution.')
     }
     resolution = 'contract_timeout'
   } else {

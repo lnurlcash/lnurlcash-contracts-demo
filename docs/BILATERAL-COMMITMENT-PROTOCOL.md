@@ -90,6 +90,10 @@ contradictory self-cancellations returned a terminal result before any decision 
 agreement was read, and a dispute that received no decision inside the settlement window could
 never be resolved or timed out. Version 2 adds the terminal refund and treats contradictory
 admissions as an ordinary dispute. No outcome that was executable under version 1 resolves
-differently under version 2; only states that were previously stuck became reachable. That is why
-existing v1 contracts resolve under the version 2 rules: the change can only free value that was
-otherwise lost, so no party accepting v1 is disadvantaged by it.
+differently under version 2; only states that were previously stuck became reachable.
+
+A v1 contract keeps the v1 settlement table. Treating contradictory admissions as a dispute applies
+to both, because v1 already promised that a dispute resolves by arbiter decision. The terminal
+refund does not: v1 has no such row, and a refund is not a safe default for a party who would
+otherwise have been awarded both bonds. A disputed v1 contract therefore stays frozen until a
+signed decision is imported, which is the rule its parties actually accepted.
