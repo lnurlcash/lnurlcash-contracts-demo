@@ -30,6 +30,16 @@ export const POLICY_VERSIONS: Readonly<Record<string, number>> = Object.freeze({
   'bilateral-arbiter-v2': 2
 })
 
+// Keyed by the policy a contract was accepted under, never by whichever policy
+// happens to be current. Reading the current constant here would strip the
+// terminal refund from every signed v2 contract the day v3 arrives.
+export type PolicyCapabilities = {terminalRefund: boolean}
+
+export const POLICY_CAPABILITIES: Readonly<Record<string, PolicyCapabilities>> = Object.freeze({
+  'bilateral-arbiter-v1': Object.freeze({terminalRefund: false}),
+  'bilateral-arbiter-v2': Object.freeze({terminalRefund: true})
+})
+
 export type ContractTerms = {
   v: 1
   contractId: string

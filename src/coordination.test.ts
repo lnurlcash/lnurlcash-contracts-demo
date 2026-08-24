@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest'
+import {describe, expect, it, vi} from 'vitest'
 import {finalizeEvent} from 'nostr-tools'
 import {
   CONTRACT_OFFER_KIND,
@@ -179,49 +179,55 @@ describe('superseded policy handling', () => {
     })).toThrow('superseded')
   })
 
-  it('refuses to sign a decision that could never be executed', async () => {
-    const partyA = createIdentity()
-    const partyB = createIdentity()
-    const arbiter = createIdentity()
-    const now = Math.floor(Date.now() / 1000)
-    const terms: ContractTerms = {
-      v: 1,
-      contractId: randomId(),
-      template: 'delivery',
-      title: 'Deliver one parcel',
-      memo: '',
-      labels: {party_a: 'Customer', party_b: 'Courier', arbiter: 'Dispatch arbiter'},
-      participants: {party_a: partyA.pubkey, party_b: partyB.pubkey, arbiter: arbiter.pubkey},
-      bonds: {party_a: '11', party_b: '17'},
-      mint,
-      setupExpires: now + 2,
-      serviceStarts: now + 2,
-      settlementExpires: now + 3,
-      policy: {id: 'bilateral-arbiter-v2', version: 2, challengeSeconds: 60}
+  it('refuses to sign a decision that could never be executed', () => {
+    vi.useFakeTimers()
+    try {
+      const base = 1_800_000_000
+      vi.setSystemTime(base * 1000)
+      const partyA = createIdentity()
+      const partyB = createIdentity()
+      const arbiter = createIdentity()
+      const terms: ContractTerms = {
+        v: 1,
+        contractId: randomId(),
+        template: 'delivery',
+        title: 'Deliver one parcel',
+        memo: '',
+        labels: {party_a: 'Customer', party_b: 'Courier', arbiter: 'Dispatch arbiter'},
+        participants: {party_a: partyA.pubkey, party_b: partyB.pubkey, arbiter: arbiter.pubkey},
+        bonds: {party_a: '11', party_b: '17'},
+        mint,
+        setupExpires: base + 600,
+        serviceStarts: base + 600,
+        settlementExpires: base + 3600,
+        policy: {id: 'bilateral-arbiter-v2', version: 2, challengeSeconds: 60}
+      }
+      const offer = signContractOffer(terms, arbiter.secretHex)
+      const secrets = {
+        party_a: {party_a: randomSecretHex(), party_b: randomSecretHex()},
+        party_b: {party_a: randomSecretHex(), party_b: randomSecretHex()}
+      }
+      const acceptances = {
+        party_a: signAcceptance(offer, 'party_a', {party_a: outputHashOf(secrets.party_a.party_a), party_b: outputHashOf(secrets.party_a.party_b)}, partyA.secretHex),
+        party_b: signAcceptance(offer, 'party_b', {party_a: outputHashOf(secrets.party_b.party_a), party_b: outputHashOf(secrets.party_b.party_b)}, partyB.secretHex)
+      }
+      const request = (role: PartyRole) => signRequest({
+        v: 2, contractId: terms.contractId, revision: 1, purpose: 'commitment', receiverRole: 'arbiter',
+        payerRole: role, offerId: offer.event.id, participants: terms.participants, amount: terms.bonds[role],
+        currency: 'sat', mint, outputHash: outputHashOf(randomSecretHex()), expires: terms.setupExpires, memo: 'commitment'
+      } as CommitmentIntent, arbiter.secretHex)
+      const packet = decodeContractPacket(encodeContractPacket({
+        offer, acceptances, bondRequests: {party_a: request('party_a'), party_b: request('party_b')}
+      }))
+      const sign = () => signArbiterDecision(packet, 'refund_both', outputHashOf(randomSecretHex()), 'other', arbiter.secretHex)
+      expect(sign().type).toBe('arbiter_decision')
+      vi.setSystemTime((terms.settlementExpires + 1) * 1000)
+      // A late decision used to sign, persist, then fail every later validation.
+      expect(sign).toThrow('could never be executed')
+    } finally {
+      vi.useRealTimers()
     }
-    const offer = signContractOffer(terms, arbiter.secretHex)
-    const secrets = {
-      party_a: {party_a: randomSecretHex(), party_b: randomSecretHex()},
-      party_b: {party_a: randomSecretHex(), party_b: randomSecretHex()}
-    }
-    const acceptances = {
-      party_a: signAcceptance(offer, 'party_a', {party_a: outputHashOf(secrets.party_a.party_a), party_b: outputHashOf(secrets.party_a.party_b)}, partyA.secretHex),
-      party_b: signAcceptance(offer, 'party_b', {party_a: outputHashOf(secrets.party_b.party_a), party_b: outputHashOf(secrets.party_b.party_b)}, partyB.secretHex)
-    }
-    const request = (role: PartyRole) => signRequest({
-      v: 2, contractId: terms.contractId, revision: 1, purpose: 'commitment', receiverRole: 'arbiter',
-      payerRole: role, offerId: offer.event.id, participants: terms.participants, amount: terms.bonds[role],
-      currency: 'sat', mint, outputHash: outputHashOf(randomSecretHex()), expires: terms.setupExpires, memo: 'commitment'
-    } as CommitmentIntent, arbiter.secretHex)
-    const packet = decodeContractPacket(encodeContractPacket({
-      offer, acceptances, bondRequests: {party_a: request('party_a'), party_b: request('party_b')}
-    }))
-    expect(signArbiterDecision(packet, 'refund_both', outputHashOf(randomSecretHex()), 'other', arbiter.secretHex).type).toBe('arbiter_decision')
-    await new Promise(resolve => setTimeout(resolve, 4000))
-    // A late decision used to sign, persist, then fail every later validation.
-    expect(() => signArbiterDecision(packet, 'refund_both', outputHashOf(randomSecretHex()), 'other', arbiter.secretHex))
-      .toThrow('could never be executed')
-  }, 20_000)
+  })
 
   it('refuses an offer whose policy id and version disagree', () => {
     const arbiter = createIdentity()

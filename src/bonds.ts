@@ -14,7 +14,7 @@ import {
   type SignedPayoutAcknowledgement,
   type SignedSettlementNotice
 } from './coordination'
-import {CURRENT_POLICY_ID, PARTY_ROLES, type PartyRole} from './contract-types'
+import {PARTY_ROLES, POLICY_CAPABILITIES, type PartyRole} from './contract-types'
 import {decodeRequest, isCommitmentIntent, outputHashOf} from './protocol'
 import type {DemoStore, SettlementResolution, StoredRequest, StoredSettlement} from './store'
 
@@ -164,7 +164,7 @@ export const disputeTerminalAt = (packet: ContractPacket): number =>
   packet.offer.terms.settlementExpires + packet.offer.terms.policy.challengeSeconds
 
 export const hasTerminalRefund = (packet: ContractPacket): boolean =>
-  packet.offer.terms.policy.id === CURRENT_POLICY_ID
+  POLICY_CAPABILITIES[packet.offer.terms.policy.id]?.terminalRefund === true
 
 const allSettlementsFor = (store: DemoStore, requestId: string): StoredSettlement[] => store.settlements.filter(item => item.bondRequestId === requestId)
 
