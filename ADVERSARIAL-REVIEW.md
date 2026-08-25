@@ -78,9 +78,9 @@ If an arbiter loses the mutation response, the beneficiary may find the output a
 
 The three-profile test proves copy/paste and fragment hand-off. It does not prove NIP-59 delivery, ordering, retries or authenticated messenger UX. Fragments stay out of HTTP requests but remain visible to endpoints, history and extensions.
 
-### A8. Public source reproducibility
+### A8. Independent build provenance
 
-The repository is public at `github.com/TheCryptoDonkey/lnurlcash-contracts-demo`, so the source commit can be fetched independently. What remains is reproducible build instructions that let a third party rebuild the published asset hashes from that commit. That is a release-transparency gap, not a cryptographic protocol gap.
+The repository, locked dependencies, Node 24 build commands, deployed source commit and public asset hashes are all published. This release has not yet received a third-party rebuild attestation or signed software provenance. That is a remaining release-transparency check, not a cryptographic protocol gap.
 
 ### A9. Split-view equivocation discovery
 
@@ -109,7 +109,7 @@ This improves griefing resistance and auditability. It does not manufacture an o
 2. Exercise every portable message through the intended NIP-59 or application transport, including duplicate, delayed, reordered and dropped delivery.
 3. Run a browser-level hostile mock mint covering callback substitution, key substitution, replay, malformed and oversized bodies, definite refusal, dropped mutation responses and non-idempotent retry behaviour.
 4. Move note spending and participant signing behind a wallet API so the page never receives long-lived keys or arbitrary bearer notes.
-5. Publish the exact source commit and reproducible build instructions at a public immutable location.
+5. Have an independent developer rebuild the published source commit and compare all four asset hashes; add signed provenance before treating deployment identity as independently attested.
 6. Replace single-arbiter custody with mint-enforced conditions or a documented threshold custodian before raising the cap or making a trustless claim.
 
 Until those gates pass, retain the 500-sat cap and the explicit `arbiter custody` label.

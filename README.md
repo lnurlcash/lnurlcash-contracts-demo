@@ -66,5 +66,6 @@ Arbiter custody is not a design choice that better client code can undo. An outp
 ## Hosting
 
 The public lab is [labs.moneyer.dev](https://labs.moneyer.dev). Deployment evidence, asset hashes and rollback locations are recorded in [DEPLOY.md](DEPLOY.md).
+The exact source is public at [TheCryptoDonkey/lnurlcash-contracts-demo](https://github.com/TheCryptoDonkey/lnurlcash-contracts-demo), so other LNURLcash developers can inspect the signed-state model and run the same browser ceremony themselves.
 
 The static host sends a mint-specific CSP, disables framing and browser capabilities the lab does not need, prevents HTML caching and gives immutable caching only to fingerprinted assets.
