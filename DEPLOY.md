@@ -47,7 +47,7 @@ HTML should revalidate. Fingerprinted assets may be cached immutably. Do not add
 4. Validate Caddy configuration before reload.
 5. Atomically switch the static root. Reload Caddy only when its validated configuration changed.
 6. Confirm the certificate, headers, asset hashes and desktop/mobile rendering from outside the server.
-7. Run the separate-browser hand-off smoke against the public origin.
+7. Run `DEMO_ORIGIN=https://labs.moneyer.dev LIVE_MINT=1 npm run acceptance:browser` against the public origin.
 8. Move no real sats until the remaining lifecycle gates in `ADVERSARIAL-REVIEW.md` are satisfied, and keep every pre-production experiment tiny and disposable.
 
 Keep a timestamped copy of the previous static directory for rollback. The deployment must not share write permissions with the mint process or expose any mint database, environment or Lightning credentials.

@@ -1,6 +1,6 @@
 # Adversarial review
 
-Reviewed against the v2 source and three independent browser profiles on 23 August 2026.
+Reviewed against the hardened v2 source and three independent browser profiles on 25 August 2026.
 
 ## Verdict
 

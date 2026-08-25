@@ -15,7 +15,7 @@ The protocol is transport-agnostic. The static site has no account system, match
 9. The arbiter imports rather than synthesises those statements. A disputed decision is signed separately and challenge-delayed.
 10. Settlement notices return to beneficiaries. Each beneficiary probes a secret that never left its browser and signs a payout acknowledgement.
 
-The automated browser ceremony asserts that the Party A profile contains only its Party A identity, Party B contains only Party B, and the arbiter contains only the arbiter identity. It also asserts that the four payout targets are distinct and the arbiter store contains no beneficiary payout secrets.
+The automated browser ceremony asserts that the Party A profile contains only its Party A identity, Party B contains only Party B, and the arbiter contains only the arbiter identity. It also asserts that the four payout targets are distinct, the arbiter store contains no beneficiary payout secrets, a locally corrupted payout secret blocks packet import, and an imported dispute freezes an otherwise executable pair of completion statements.
 
 The real-sat funding and settlement lifecycle still needs disposable-note acceptance across those same profiles. Protocol ceremony evidence is not settlement evidence.
 

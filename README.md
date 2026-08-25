@@ -43,7 +43,10 @@ The remote protocol is transport-agnostic. Copy and paste works now. NIP-59, Sig
 npm install
 npm run check
 npm run dev
+npm run acceptance:browser
 ```
+
+The browser acceptance expects Chrome and defaults to `http://127.0.0.1:4181`. Set `DEMO_ORIGIN=https://labs.moneyer.dev LIVE_MINT=1` to exercise the deployed site and live pinned mint discovery without moving sats.
 
 For a real transfer, create an exact-value disposable note in Notecase or another compatible LUD-25 wallet. Do not use meaningful balances.
 
