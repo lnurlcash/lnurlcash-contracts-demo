@@ -21,73 +21,11 @@ import {
   signOutcomeStatement,
   signPayoutAcknowledgement,
   signSettlementNotice,
-  type ContractPacket
 } from './coordination'
+import {coordinationFixture as fixture, mint} from './coordination.fixture'
+import {CONTRACT_TEMPLATES, type BilateralPolicy, type ContractTerms, type PartyRole} from './contract-types'
 import {createIdentity, outputHashOf, randomId, randomSecretHex, signRequest, type CommitmentIntent} from './protocol'
 import {hexToBytes} from '@noble/hashes/utils.js'
-import type {BilateralPolicy, ContractTerms, PartyRole} from './contract-types'
-
-const mint = {
-  host: 'mint.forgesworn.dev',
-  withdrawLink: 'https://mint.forgesworn.dev/w',
-  mintPubkey: '03bcd4846649e7b7d27e044ed7305547a5cf0209bd9629aa1de67f47d0c41b4407'
-}
-
-const fixture = () => {
-  const partyA = createIdentity()
-  const partyB = createIdentity()
-  const arbiter = createIdentity()
-  const now = Math.floor(Date.now() / 1000)
-  const terms: ContractTerms = {
-    v: 1,
-    contractId: randomId(),
-    template: 'delivery',
-    title: 'Deliver one parcel',
-    memo: 'Collection and delivery agreed off-protocol.',
-    labels: {party_a: 'Customer', party_b: 'Courier', arbiter: 'Dispatch arbiter'},
-    participants: {party_a: partyA.pubkey, party_b: partyB.pubkey, arbiter: arbiter.pubkey},
-    bonds: {party_a: '11', party_b: '17'},
-    mint,
-    setupExpires: now + 600,
-    serviceStarts: now + 3600,
-    settlementExpires: now + 86_400,
-    policy: {id: 'bilateral-arbiter-v2', version: 2, challengeSeconds: 300}
-  }
-  const offer = signContractOffer(terms, arbiter.secretHex)
-  const secrets = {
-    party_a: {party_a: randomSecretHex(), party_b: randomSecretHex()},
-    party_b: {party_a: randomSecretHex(), party_b: randomSecretHex()}
-  }
-  const acceptance = (role: PartyRole) => signAcceptance(offer, role, {
-    party_a: outputHashOf(secrets[role].party_a),
-    party_b: outputHashOf(secrets[role].party_b)
-  }, role === 'party_a' ? partyA.secretHex : partyB.secretHex)
-  const acceptances = {party_a: acceptance('party_a'), party_b: acceptance('party_b')}
-  const request = (role: PartyRole) => {
-    const receiverSecret = randomSecretHex()
-    const intent: CommitmentIntent = {
-      v: 2,
-      contractId: terms.contractId,
-      revision: 1,
-      purpose: 'commitment',
-      receiverRole: 'arbiter',
-      payerRole: role,
-      offerId: offer.event.id,
-      participants: terms.participants,
-      amount: terms.bonds[role],
-      currency: 'sat',
-      mint,
-      outputHash: outputHashOf(receiverSecret),
-      expires: terms.setupExpires,
-      memo: `${terms.labels[role]} commitment`
-    }
-    return signRequest(intent, arbiter.secretHex)
-  }
-  const bondRequests = {party_a: request('party_a'), party_b: request('party_b')}
-  const encoded = encodeContractPacket({offer, acceptances, bondRequests})
-  const packet = decodeContractPacket(encoded)
-  return {partyA, partyB, arbiter, offer, acceptances, bondRequests, encoded, packet, secrets}
-}
 
 // A superseded offer can only be produced by signing it the way an older build
 // did, so build the event directly rather than through signContractOffer.
@@ -250,6 +188,20 @@ describe('portable bilateral coordination', () => {
     expect(() => signContractOffer(offer.terms, createIdentity().secretHex)).toThrow('named arbiter')
   })
 
+  it.each(CONTRACT_TEMPLATES)('round-trips the %s template without changing neutral wire authority', template => {
+    const {offer, arbiter} = fixture()
+    const templated = signContractOffer({...offer.terms, contractId: randomId(), template}, arbiter.secretHex)
+    const decoded = decodeContractMessage(templated.encoded)
+    expect(decoded).toMatchObject({
+      type: 'contract_offer',
+      terms: {
+        template,
+        participants: offer.terms.participants,
+        policy: offer.terms.policy
+      }
+    })
+  })
+
   it('requires independent acceptances and two unique payout targets per party', () => {
     const {offer, partyA, acceptances} = fixture()
     assertAcceptance(acceptances.party_a, offer)
@@ -325,6 +277,3 @@ describe('portable bilateral coordination', () => {
     expect(() => decodeContractPacket(`cashpacket1${'A'.repeat(66_000)}`)).toThrow('too large')
   })
 })
-
-export type CoordinationFixture = ReturnType<typeof fixture>
-export const coordinationFixture = (): CoordinationFixture => fixture()

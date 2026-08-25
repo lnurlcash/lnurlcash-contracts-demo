@@ -34,9 +34,12 @@ The lab now demonstrates a generic, remotely coordinated bilateral commitment pr
 - Each commitment request binds the offer id, named payer, complete participant set, exact amount, mint and arbiter-owned receiver hash.
 - Activation requires both participant funding acknowledgements and both outputs independently visible to the arbiter.
 - Outcomes, decisions, notices and payout acknowledgements bind both the exact offer and exact bond-set hash.
+- Known reuse of one contract id with different offers, acceptance replacement, packet replacement and per-source settlement-notice replacement all fail closed.
+- A locally named participant cannot fund or sign an outcome unless its packet acceptance still matches both private payout secrets in that browser.
 - Completion and mutual cancellation require both parties. Self-cancellation can only be signed by the self-cancelling party.
-- Contradictory self-cancellations fail into dispute. A dispute freezes value until a decision executes or the terminal refund deadline passes.
-- Arbiter decisions contain a reason and evidence hash and cannot execute until the signed challenge period ends.
+- Contradictory self-cancellations fail into dispute. An explicit dispute takes precedence over otherwise executable participant outcomes, and freezes value until a decision executes or the terminal refund deadline passes.
+- Arbiter decisions contain a reason and evidence hash, must follow a signed dispute and cannot execute until the signed challenge period ends.
+- Distinct decisions are retained rather than overwritten and make settlement refuse as arbiter equivocation.
 - Setup timeout refunds every funded but unactivated side. Contract timeout refunds both active sides without assigning guilt when no dispute or executable authority exists.
 - Resolution is monotonic. Another contract, resolution or output hash cannot replace a staged journal.
 - Every settlement input uses the exact target accepted by its selected beneficiary for that source role.
@@ -79,6 +82,10 @@ The three-profile test proves copy/paste and fragment hand-off. It does not prov
 
 The repository is public at `github.com/TheCryptoDonkey/lnurlcash-contracts-demo`, so the source commit can be fetched independently. What remains is reproducible build instructions that let a third party rebuild the published asset hashes from that commit. That is a release-transparency gap, not a cryptographic protocol gap.
 
+### A9. Split-view equivocation discovery
+
+The client now fails closed when it sees conflicting signed offers, acceptances, packets, decisions or settlement notices. A malicious arbiter can still show one fork to Party A and another to Party B if the parties never compare the same transcript. Copy/paste transport provides no global consistency or gossip proof. The packet and offer fingerprints must be compared over an authenticated shared channel; a production coordinator should publish an append-only contract transcript.
+
 ## Smarter policy now implemented
 
 - neutral bilateral roles with signed use-case templates;
@@ -92,6 +99,7 @@ The repository is public at `github.com/TheCryptoDonkey/lnurlcash-contracts-demo
 - a terminal no-fault refund one challenge period after settlement expiry, so no reachable state freezes value permanently;
 - durable, monotonic per-input settlement journals;
 - beneficiary acknowledgements that reconcile successful ambiguous settlement without target substitution.
+- canonical signed-state slots, local payout-secret continuity and retained decision-equivocation evidence.
 
 This improves griefing resistance and auditability. It does not manufacture an objective service oracle or remove custody.
 

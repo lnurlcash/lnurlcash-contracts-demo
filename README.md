@@ -27,6 +27,7 @@ The remote ceremony is:
 If setup never activates, every funded side is refundable after the setup deadline. If an active contract reaches its settlement deadline with no dispute or executable outcome, both sides are refunded without assigning guilt. Silence never causes forfeiture.
 
 The canonical message model and resolution table are in [docs/BILATERAL-COMMITMENT-PROTOCOL.md](docs/BILATERAL-COMMITMENT-PROTOCOL.md).
+The exact role mapping, supported templates and cases this policy deliberately does not cover are in [docs/USE-CASE-MATRIX.md](docs/USE-CASE-MATRIX.md).
 
 ## What is experimental
 
@@ -53,6 +54,7 @@ For a real transfer, create an exact-value disposable note in Notecase or anothe
 - Delivered JavaScript and browser extensions can read locally held keys and bearer secrets. Production spending and signing belong in a wallet.
 - The mint can steal, censor, link activity or become insolvent. Key pinning detects substitution, not solvency.
 - A no-show is evidence for an attributable human decision, not an objective fact produced by GPS or silence.
+- A second valid signature can still be malicious. Known offer, acceptance, packet, decision and settlement forks are detected and fail closed rather than replacing the first state.
 
 See [THREAT-MODEL.md](THREAT-MODEL.md) and [ADVERSARIAL-REVIEW.md](ADVERSARIAL-REVIEW.md) for the current verdict and remaining acceptance gates.
 

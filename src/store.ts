@@ -23,7 +23,7 @@ export type StoredContract = {
   packet?: string
   fundingAcks: Partial<Record<PartyRole, string>>
   outcomes: string[]
-  decision?: string
+  decisions: string[]
   settlementNotices: string[]
   payoutAcks: string[]
 }

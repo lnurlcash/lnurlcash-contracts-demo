@@ -40,6 +40,8 @@ A valid enrolment proves control of a Nostr key, not the real-world person contr
 
 That application authentication is deliberately outside the generic payment rail. The signed contract preserves the resulting key choice so it cannot be changed later without new acceptances.
 
+All three people should compare the same offer fingerprint and bond-packet fingerprint in one authenticated shared conversation. Signatures prove who created each fork; they do not magically tell an isolated browser that another device was shown a different valid fork. The client refuses equivocation when both versions reach it, while a production coordinator should add an append-only transcript or gossip path so split views are discoverable.
+
 ## Host boundary
 
 The host receives no fragments and keeps no contract database, but every browser trusts the JavaScript it downloads. A compromised origin could read pasted notes, locally stored keys and payout secrets.

@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest'
+import {afterEach, describe, expect, it, vi} from 'vitest'
 import {
   applyPayoutAcknowledgement,
   contractActivationState,
@@ -18,7 +18,7 @@ import {
   signPayoutAcknowledgement,
   signSettlementNotice
 } from './coordination'
-import type {ContractTerms, PartyRole} from './contract-types'
+import {CONTRACT_TEMPLATES, type ContractTemplate, type ContractTerms, type PartyRole} from './contract-types'
 import {createIdentity, outputHashOf, randomId, randomSecretHex, signRequest, type CommitmentIntent} from './protocol'
 import type {DemoStore, StoredRequest} from './store'
 
@@ -30,7 +30,7 @@ const mint = {
 
 const emptyStore = (): DemoStore => ({identities: {}, enrolments: {}, requests: {}, contracts: {}, payoutTargets: {}, settlements: [], resolutions: {}})
 
-const fixture = (options: {fundedA?: boolean; fundedB?: boolean; expires?: number} = {}) => {
+const fixture = (options: {fundedA?: boolean; fundedB?: boolean; expires?: number; template?: ContractTemplate} = {}) => {
   const partyA = createIdentity()
   const partyB = createIdentity()
   const arbiter = createIdentity()
@@ -38,7 +38,7 @@ const fixture = (options: {fundedA?: boolean; fundedB?: boolean; expires?: numbe
   const terms: ContractTerms = {
     v: 1,
     contractId: randomId(),
-    template: 'work',
+    template: options.template ?? 'work',
     title: 'Review one pull request',
     memo: '',
     labels: {party_a: 'Client', party_b: 'Reviewer', arbiter: 'Project arbiter'},
@@ -95,6 +95,7 @@ const fixture = (options: {fundedA?: boolean; fundedB?: boolean; expires?: numbe
     packet: packet.encoded,
     fundingAcks: {},
     outcomes: [],
+    decisions: [],
     settlementNotices: [],
     payoutAcks: []
   }
@@ -112,6 +113,8 @@ const confirmedRedirect = async (held: NonNullable<StoredRequest['received']>, _
 })
 
 describe('generic activation and authority', () => {
+  afterEach(() => vi.useRealTimers())
+
   it('activates only when both mint outputs and both named-payer acknowledgements exist', () => {
     const {store, packet} = fixture()
     expect(contractActivationState(store, packet).active).toBe(true)
@@ -129,6 +132,19 @@ describe('generic activation and authority', () => {
     expect(evaluateResolutionEvidence(packet, [aCancel.encoded])).toMatchObject({state: 'executable', resolution: 'party_a_cancel'})
   })
 
+  it.each(CONTRACT_TEMPLATES)('applies the same signed bilateral bond policy to the %s template', template => {
+    const {packet, partyA, partyB} = fixture({template})
+    expect(packet.offer.terms.template).toBe(template)
+    const complete = [
+      signOutcomeStatement(packet, 'complete', partyA.secretHex).encoded,
+      signOutcomeStatement(packet, 'complete', partyB.secretHex).encoded
+    ]
+    expect(evaluateResolutionEvidence(packet, complete)).toMatchObject({state: 'executable', resolution: 'complete'})
+    expect(evaluateResolutionEvidence(packet, [signOutcomeStatement(packet, 'party_b_cancel', partyB.secretHex).encoded])).toMatchObject({
+      state: 'executable', resolution: 'party_b_cancel'
+    })
+  })
+
   it('freezes disputes and enforces the signed challenge period before a decision', () => {
     const {packet, partyA, arbiter} = fixture()
     const dispute = signOutcomeStatement(packet, 'dispute', partyA.secretHex)
@@ -138,11 +154,31 @@ describe('generic activation and authority', () => {
     expect(() => evaluateResolutionEvidence(packet, [], decision.encoded, decision.event.created_at + 60)).toThrow('neither party raised')
   })
 
+  it('does not let matching completion signatures suppress an imported dispute', () => {
+    const {packet, partyA, partyB} = fixture()
+    const outcomes = [
+      signOutcomeStatement(packet, 'complete', partyA.secretHex).encoded,
+      signOutcomeStatement(packet, 'complete', partyB.secretHex).encoded,
+      signOutcomeStatement(packet, 'dispute', partyA.secretHex).encoded
+    ]
+    expect(evaluateResolutionEvidence(packet, outcomes)).toMatchObject({state: 'disputed', reason: 'A participant raised a dispute.'})
+  })
+
+  it('refuses an arbiter decision signed before the dispute existed', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-23T10:00:00Z'))
+    const {packet, partyA, arbiter} = fixture()
+    const decision = signArbiterDecision(packet, 'award_party_a', outputHashOf('aa'.repeat(32)), 'service_failure', arbiter.secretHex)
+    vi.setSystemTime(new Date('2026-08-23T10:00:02Z'))
+    const dispute = signOutcomeStatement(packet, 'dispute', partyA.secretHex)
+    expect(() => evaluateResolutionEvidence(packet, [dispute.encoded], decision.encoded, decision.event.created_at + 1_000)).toThrow('predates the dispute')
+  })
+
   it('fails closed when both parties submit contradictory self-cancellations', () => {
     const {packet, partyA, partyB} = fixture()
     const a = signOutcomeStatement(packet, 'party_a_cancel', partyA.secretHex)
     const b = signOutcomeStatement(packet, 'party_b_cancel', partyB.secretHex)
-    expect(evaluateResolutionEvidence(packet, [a.encoded, b.encoded])).toEqual({state: 'disputed'})
+    expect(evaluateResolutionEvidence(packet, [a.encoded, b.encoded])).toMatchObject({state: 'disputed', reason: 'Contradictory self-cancellations require an arbiter decision.'})
   })
 })
 
@@ -254,7 +290,7 @@ describe('beneficiary-owned settlement', () => {
     const b = signOutcomeStatement(packet, 'party_b_cancel', partyB.secretHex)
     const decision = signArbiterDecision(packet, 'refund_both', outputHashOf(randomSecretHex()), 'other', arbiter.secretHex)
     const outcomes = [a.encoded, b.encoded]
-    expect(evaluateResolutionEvidence(packet, outcomes)).toEqual({state: 'disputed'})
+    expect(evaluateResolutionEvidence(packet, outcomes)).toMatchObject({state: 'disputed', reason: 'Contradictory self-cancellations require an arbiter decision.'})
     expect(evaluateResolutionEvidence(packet, outcomes, decision.encoded, decision.event.created_at + 59)).toMatchObject({state: 'disputed'})
     expect(evaluateResolutionEvidence(packet, outcomes, decision.encoded, decision.event.created_at + 60))
       .toMatchObject({state: 'executable', resolution: 'refund_both'})
@@ -288,7 +324,7 @@ describe('beneficiary-owned settlement', () => {
     const {store, packet, partyA, arbiter} = fixture()
     const dispute = signOutcomeStatement(packet, 'dispute', partyA.secretHex)
     const decision = signArbiterDecision(packet, 'award_party_a', outputHashOf(randomSecretHex()), 'no_show', arbiter.secretHex)
-    await expect(resolveHeldCommitments(store, packet, {kind: 'contract_timeout', outcomes: [dispute.encoded], decision: decision.encoded}, {
+    await expect(resolveHeldCommitments(store, packet, {kind: 'contract_timeout', outcomes: [dispute.encoded], decisions: [decision.encoded]}, {
       persist: () => undefined, redirect: confirmedRedirect, nowSeconds: disputeTerminalAt(packet)
     })).rejects.toThrow('Executable signed authority exists')
     expect(store.settlements).toHaveLength(0)

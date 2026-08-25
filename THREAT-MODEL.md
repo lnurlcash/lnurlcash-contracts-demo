@@ -22,14 +22,19 @@
 - **Arbiter invents parties:** each party key arrives in a signed enrolment and independently countersigns the complete offer.
 - **Display-label authority:** settlement uses `party_a`, `party_b` and `arbiter`; rider, courier or client are signed display labels only.
 - **Arbiter substitutes terms:** both acceptances bind the exact offer event id.
+- **Arbiter forks one contract id:** a known second offer with the same contract id is refused rather than treated as a revision.
 - **Arbiter substitutes payout:** each acceptance binds two private per-source output hashes. All four contract targets must differ.
+- **Valid acceptance substitution:** one role cannot overwrite its first accepted event; a locally owned participant must still possess secrets matching the packet before funding.
+- **Arbiter forks the bond packet:** a second valid pair of bond requests cannot replace the first canonical packet.
 - **Anonymous donation activates a party:** activation also requires a funding acknowledgement from the exact named payer key.
 - **Payer claims funding without value:** the arbiter must independently find the exact output at the mint.
 - **Party frames the other as canceller:** self-cancellation must come from the self-cancelling key.
 - **One party claims completion:** completion and mutual cancellation need matching statements from both keys.
 - **Cross-contract replay:** every post-offer message binds the offer id and exact pair of bond request ids.
 - **Contradictory self-cancellation:** conflicting admissions become a dispute rather than a terminal state, so a decision or a bilateral agreement can still resolve them.
+- **Outcome suppresses dispute:** an explicit dispute takes precedence over ordinary participant outcomes.
 - **Silence treated as guilt:** setup and contract timeout refund without assigning fault. A dispute requires attributable judgement.
+- **Pre-signed or conflicting judgement:** a decision must follow a signed dispute; two distinct decisions are retained as equivocation evidence and freeze settlement.
 - **Instant arbiter judgement:** decisions carry a reason and evidence hash and wait through the signed challenge period.
 - **Permanently frozen value:** every reachable state has an exit. An unresolved dispute refunds both sides one challenge period after settlement expiry, because no further signed authority can exist by then.
 - **Partial setup grief:** every funded but unactivated side can be refunded after setup expiry, even if an anonymous donor funded both hashes.
@@ -51,6 +56,7 @@
 - **Endpoint metadata:** fragments are absent from HTTP requests but visible to the receiving endpoint, browser history, extensions and screenshots.
 - **Key loss:** this static lab has no encrypted backup or social recovery.
 - **Mint non-idempotence after non-receipt:** the lab will not automatically retry an ambiguous mutation when the beneficiary finds nothing.
+- **Equivocation hidden across isolated devices:** a client can fail closed only after it receives both forks. Participants still need a shared transcript or gossip transport to discover split-view attacks.
 
 ## Operational rules
 

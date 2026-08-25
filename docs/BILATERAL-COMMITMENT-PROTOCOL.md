@@ -27,6 +27,10 @@ Every object is a complete Nostr event with an exact tag set and a strict JSON b
 9. **Settlement notice** is signed by the arbiter and binds a source bond to the beneficiary's already accepted output hash. The participant still probes the mint independently; the notice is not proof of solvency or receipt.
 10. **Payout acknowledgement** is signed by the beneficiary only after its browser finds the private target at the mint. It lets an ambiguous two-leg settlement resume without revealing the payout secret or choosing another hash.
 
+Signed does not mean canonical. The client keeps one immutable offer per contract id, one acceptance per role, one bond packet and one settlement notice per source bond. A different valid signature for one of those slots is an equivocation signal and cannot overwrite the first value. Arbiter decisions are retained as a set so two different decisions visibly freeze settlement.
+
+Before a named participant can fund or sign an outcome, the packet acceptance, locally persisted acceptance, two output hashes and two private payout secrets must all agree. Importing a cryptographically valid packet is not enough.
+
 ## Resolution table
 
 | Resolution | Required signed authority | Party A bond | Party B bond |
@@ -48,6 +52,8 @@ statement or decision can be signed after the settlement window, so an unresolve
 refunds both sides once one further challenge period has elapsed. Contradictory
 self-cancellations are treated as a dispute rather than a terminal state, so an arbiter
 decision — or the two parties simply agreeing — can still resolve them.
+
+An explicit dispute takes precedence over completion, mutual cancellation or self-cancellation already present in the message set. Contradictory self-cancellations are also a dispute. A decision signed before the dispute is invalid, and more than one distinct decision is detectable arbiter equivocation. The challenge period is a settlement delay, not a cryptographic appeal court.
 
 ## Activation invariant
 

@@ -36,7 +36,7 @@ export type ActivationState = {
 
 export type EvidenceState =
   | {state: 'pending'; reason: string}
-  | {state: 'disputed'; challengeEnds?: number; decision?: SignedArbiterDecision}
+  | {state: 'disputed'; reason: string; challengeEnds?: number; decision?: SignedArbiterDecision}
   | {state: 'executable'; resolution: Exclude<SettlementResolution, 'setup_abort'>; authorityIds: string[]}
 
 const receivedMatches = (record: StoredRequest): void => {
@@ -113,39 +113,64 @@ const importedOutcomes = (encoded: string[], packet: ContractPacket): Array<{sta
 export const evaluateResolutionEvidence = (
   packet: ContractPacket,
   outcomeInputs: string[],
-  decisionInput?: string,
+  decisionInput: string | string[] = [],
   nowSeconds = Math.floor(Date.now() / 1000)
 ): EvidenceState => {
   const statements = importedOutcomes(outcomeInputs, packet)
   const selfCancels = statements.filter(({statement}) => ['party_a_cancel', 'party_b_cancel'].includes(statement.outcome))
-  // Contradictory admissions are a dispute, not a terminal state. Returning here
-  // would make every later branch unreachable, so no decision, no bilateral
-  // agreement and no timeout could ever move the held bonds again.
-  const contradictory = new Set(selfCancels.map(({statement}) => statement.outcome)).size > 1
-  if (!contradictory && selfCancels.length) {
+  const explicitDisputes = statements.filter(({statement}) => statement.outcome === 'dispute')
+  const contradictorySelfCancels = new Set(selfCancels.map(({statement}) => statement.outcome)).size > 1
+  const disputeOpenedAt = explicitDisputes.length
+    ? Math.min(...explicitDisputes.map(({statement}) => statement.event.created_at))
+    : contradictorySelfCancels
+      ? Math.max(...selfCancels.map(({statement}) => statement.event.created_at))
+      : undefined
+  const decisionInputs = typeof decisionInput === 'string' ? [decisionInput] : decisionInput
+  const decisions = decisionInputs.map(value => {
+    const message = decodeContractMessage(value, 0)
+    if (message.type !== 'arbiter_decision') throw new Error('Stored decision authority contains another message type.')
+    assertArbiterDecision(message, packet)
+    return message
+  })
+  if (new Set(decisions.map(decision => decision.event.id)).size !== decisions.length) throw new Error('The same arbiter decision was imported twice.')
+
+  const bilateralAgreement = (): Extract<EvidenceState, {state: 'executable'}> | undefined => {
+    for (const outcome of ['complete', 'mutual_cancel'] as const) {
+      const matching = statements.filter(({statement}) => statement.outcome === outcome)
+      const roles = new Set(matching.map(({role}) => role))
+      if (roles.size === 2) return {state: 'executable', resolution: outcome, authorityIds: matching.map(({statement}) => statement.event.id)}
+    }
+    return undefined
+  }
+  const bilateral = bilateralAgreement()
+
+  // Contradictory admissions open a dispute rather than a terminal state, and the
+  // dispute branch runs before any self-cancel or matching outcome. Executing an
+  // outcome first would make every later branch unreachable, so no decision, no
+  // bilateral agreement and no timeout could ever move the held bonds again.
+  if (disputeOpenedAt !== undefined) {
+    // An explicit dispute outranks ordinary participant outcomes. Contradictory
+    // self-cancellations do not: both parties later signing the same outcome is
+    // stronger authority than their earlier conflicting admissions, and refusing
+    // it would freeze the bonds until an arbiter acts on a disagreement the
+    // parties have themselves settled.
+    if (!explicitDisputes.length && bilateral) return bilateral
+    if (!decisions.length) return {state: 'disputed', reason: contradictorySelfCancels ? 'Contradictory self-cancellations require an arbiter decision.' : 'A participant raised a dispute.'}
+    if (decisions.length > 1) return {state: 'disputed', reason: 'The arbiter signed conflicting decisions. Refuse settlement.'}
+    const decision = decisions[0]!
+    if (decision.event.created_at < disputeOpenedAt) throw new Error('The arbiter decision predates the dispute it claims to resolve.')
+    const challengeEnds = decisionExecutableAt(decision, packet.offer)
+    if (nowSeconds < challengeEnds) return {state: 'disputed', reason: 'The arbiter decision is still challenge-delayed.', challengeEnds, decision}
+    return {state: 'executable', resolution: decision.resolution, authorityIds: [decision.event.id, ...explicitDisputes.map(({statement}) => statement.event.id), ...selfCancels.map(({statement}) => statement.event.id)]}
+  }
+  if (decisions.length) throw new Error('An arbiter decision cannot create a dispute that neither party raised.')
+
+  if (selfCancels.length) {
     const selected = selfCancels[0]!.statement
     return {state: 'executable', resolution: selected.outcome as 'party_a_cancel' | 'party_b_cancel', authorityIds: [selected.event.id]}
   }
 
-  for (const outcome of ['complete', 'mutual_cancel'] as const) {
-    const matching = statements.filter(({statement}) => statement.outcome === outcome)
-    const roles = new Set(matching.map(({role}) => role))
-    if (roles.size === 2) return {state: 'executable', resolution: outcome, authorityIds: matching.map(({statement}) => statement.event.id)}
-  }
-
-  const disputeStatements = statements.filter(({statement}) => statement.outcome === 'dispute')
-  const disputed = contradictory || disputeStatements.length > 0
-  if (decisionInput) {
-    const message = decodeContractMessage(decisionInput, 0)
-    if (message.type !== 'arbiter_decision') throw new Error('Stored decision authority is not an arbiter decision.')
-    assertArbiterDecision(message, packet)
-    if (!disputed) throw new Error('An arbiter decision cannot create a dispute that neither party raised.')
-    const challengeEnds = decisionExecutableAt(message, packet.offer)
-    if (nowSeconds < challengeEnds) return {state: 'disputed', challengeEnds, decision: message}
-    const raisedBy = disputeStatements.length ? disputeStatements : selfCancels
-    return {state: 'executable', resolution: message.resolution, authorityIds: [message.event.id, ...raisedBy.map(({statement}) => statement.event.id)]}
-  }
-  if (disputed) return {state: 'disputed'}
+  if (bilateral) return bilateral
 
   const unilateral = statements.find(({statement}) => ['complete', 'mutual_cancel'].includes(statement.outcome))
   return {state: 'pending', reason: unilateral ? 'The other party has not signed the matching outcome.' : 'No executable outcome authority has been imported.'}
@@ -188,9 +213,9 @@ export type ResolveOptions = {
 }
 
 export type ResolveAuthority =
-  | {kind: 'messages'; outcomes: string[]; decision?: string}
+  | {kind: 'messages'; outcomes: string[]; decisions?: string[]}
   | {kind: 'setup_timeout'}
-  | {kind: 'contract_timeout'; outcomes: string[]; decision?: string}
+  | {kind: 'contract_timeout'; outcomes: string[]; decisions?: string[]}
 
 export const resolveHeldCommitments = async (
   store: DemoStore,
@@ -205,7 +230,7 @@ export const resolveHeldCommitments = async (
     resolution = 'setup_abort'
   } else if (authority.kind === 'contract_timeout') {
     if (now < packet.offer.terms.settlementExpires) throw new Error('The contract settlement deadline has not passed yet.')
-    const evidence = evaluateResolutionEvidence(packet, authority.outcomes, authority.decision, now)
+    const evidence = evaluateResolutionEvidence(packet, authority.outcomes, authority.decisions, now)
     // Executable authority is checked first so a decision that becomes executable
     // exactly at the terminal deadline still wins over the no-fault refund.
     if (evidence.state === 'executable') throw new Error('Executable signed authority exists; contract timeout cannot replace it.')
@@ -217,7 +242,7 @@ export const resolveHeldCommitments = async (
     }
     resolution = 'contract_timeout'
   } else {
-    const evidence = evaluateResolutionEvidence(packet, authority.outcomes, authority.decision, now)
+    const evidence = evaluateResolutionEvidence(packet, authority.outcomes, authority.decisions, now)
     if (evidence.state !== 'executable') throw new Error(evidence.state === 'disputed' ? 'The contract is disputed and cannot move value yet.' : evidence.reason)
     resolution = evidence.resolution
   }
