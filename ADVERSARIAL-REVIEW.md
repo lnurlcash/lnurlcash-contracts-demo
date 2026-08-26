@@ -1,10 +1,12 @@
 # Adversarial review
 
+> **Archived custody research.** The findings below describe the retired `bilateral-arbiter-v2` implementation and its historical funded acceptance. The public build no longer creates or imports bond packets and contains no bond funding, decision or settlement controls. Current product gates are in [docs/UK-PILOT-GATE.md](docs/UK-PILOT-GATE.md).
+
 Reviewed against the hardened v2 source, three independent browser profiles and the stateful hostile-mint gates on 26 August 2026.
 
 ## Verdict
 
-The lab now demonstrates a generic, remotely coordinated bilateral commitment protocol rather than a one-browser ride simulation. Its authority and state transitions are defensible for a capped arbiter-custodied experiment. It is still not trustless escrow or production-ready.
+The archived implementation demonstrates a generic, remotely coordinated bilateral commitment protocol rather than a one-browser ride simulation. Its authority and state transitions were defensible as bounded protocol research. It is not trustless escrow, a current public funding path or a production-ready product.
 
 | Claim | Verdict and evidence |
 | --- | --- |

@@ -1,5 +1,7 @@
 # Bilateral commitment protocol
 
+> **Retired from the public value path.** This document specifies the archived custodial research protocol. The deployed site stops after offer and acceptance, rejects the packet and value-lifecycle message types, and cannot fund or settle a bond. Do not use this protocol for a new real-money pilot.
+
 ## Scope
 
 This lab implements one reusable shape: two named parties make bounded commitments to an agreement and one named arbiter temporarily controls both bonds. A ride, delivery, booking or contracted job is a template over that shape. It is not a general smart-contract language and it is not trustless escrow.

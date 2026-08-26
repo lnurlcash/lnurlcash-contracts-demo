@@ -12,11 +12,9 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "check": "npm run test && npm run build",
-    "acceptance:browser": "npm run acceptance:browser:ceremony && npm run acceptance:browser:hostile-mint && npm run acceptance:browser:mock-lifecycle",
+    "acceptance:browser": "npm run acceptance:browser:ceremony && npm run acceptance:browser:hostile-mint",
     "acceptance:browser:ceremony": "node scripts/browser-acceptance.mjs",
-    "acceptance:browser:hostile-mint": "node scripts/browser-hostile-mint.mjs",
-    "acceptance:browser:mock-lifecycle": "node scripts/browser-mock-lifecycle.mjs",
-    "acceptance:browser:real-sats": "node scripts/browser-real-sats-lifecycle.mjs"
+    "acceptance:browser:hostile-mint": "node scripts/browser-hostile-mint.mjs"
   },
   "dependencies": {
     "@noble/hashes": "^2.3.0",

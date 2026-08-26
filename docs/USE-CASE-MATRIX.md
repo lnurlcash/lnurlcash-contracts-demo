@@ -1,5 +1,7 @@
 # Use-case matrix
 
+> **Research matrix, not a current product promise.** These outcomes describe the archived custodial state machine. The public build demonstrates only signed enrolment, offer and acceptance evidence; real bonds and forfeiture execution are disabled.
+
 The lab is generic across one deliberately bounded family: two parties each post a whole-sat commitment bond, one arbiter temporarily holds both, and the same fixed policy decides whether each bond returns to its owner or goes to the other party.
 
 | Template | Party A | Party B | What the bonds can demonstrate | What stays outside this rail |

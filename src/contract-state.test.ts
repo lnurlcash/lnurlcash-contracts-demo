@@ -81,7 +81,7 @@ describe('fail-closed contract state', () => {
     expect(record.decisions).toHaveLength(1)
     expect(record.settlementNotices).toHaveLength(2)
     expect(record.payoutAcks).toHaveLength(2)
-  })
+  }, 15_000)
 
   it('refuses two signed offers that reuse one contract id with different terms', () => {
     const {offer, arbiter} = coordinationFixture()

@@ -65,6 +65,9 @@ button.secondary { margin-top: 8px; color: var(--ink); background: transparent; 
 button.danger { color: #fff; background: #5e211b; border-color: var(--red); }
 .micro { font-size: 12px; }
 .boundary { padding: 10px; border: 1px solid #ffbd5944; border-radius: 8px; color: var(--amber) !important; }
+.plain-list { display: grid; gap: 10px; padding-left: 18px; color: var(--muted); line-height: 1.5; }
+.recommendation { font-size: 20px; }
+.recommendation b { color: var(--green); font-size: 42px; }
 details { margin-top: 20px; }
 summary { cursor: pointer; color: var(--amber); }
 

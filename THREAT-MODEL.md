@@ -1,5 +1,7 @@
 # Threat model
 
+> The bilateral custody analysis below is retained for the archived protocol modules. The deployed public application is evidence-only: it rejects bond packets and every funding, decision and settlement message. Direct recipient-owned payments remain live. See [docs/NON-CUSTODIAL-RIDE-BONDS.md](docs/NON-CUSTODIAL-RIDE-BONDS.md).
+
 ## Assets and authorities
 
 - Every LNURLcash `k1` in browser storage or pasted into the page. Whoever learns it owns that note.

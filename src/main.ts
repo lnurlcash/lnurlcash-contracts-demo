@@ -1,43 +1,22 @@
-import {sha256} from '@noble/hashes/sha2.js'
-import {bytesToHex} from '@noble/hashes/utils.js'
 import {fetchMintAddress, hashK1, noteK1, resolveNoteInput} from 'lnurlcash-kit'
-import {applyPayoutAcknowledgement, contractActivationState, disputeTerminalAt, evaluateResolutionEvidence, hasTerminalRefund, resolveHeldCommitments} from './bonds'
 import {
   fundReceiverLockedRequest,
   receiveLockedPayment,
-  receiveRedirectedPayout,
-  redirectHeldNoteToHash,
-  type FundingReceipt,
-  type SettlementReceipt
+  type FundingReceipt
 } from './cash'
 import {
   assertAcceptance,
-  assertCurrentPolicy,
   assertOfferOpen,
-  assertOutcomeStatement,
-  assertSettlementNotice,
   decodeContractMessage,
-  decodeContractPacket,
-  encodeContractPacket,
   messageFingerprint,
-  packetFingerprint,
   signAcceptance,
-  signArbiterDecision,
   signContractOffer,
   signEnrolment,
-  signFundingAcknowledgement,
-  signOutcomeStatement,
-  signPayoutAcknowledgement,
-  signSettlementNotice,
   type ContractMessage,
-  type ContractPacket,
-  type SignedContractOffer,
-  type SignedSettlementNotice
+  type SignedContractOffer
 } from './coordination'
 import {
-  assertLocalParticipantPacketContinuity,
   importVerifiedContractMessage,
-  importVerifiedContractPacket,
   normaliseStoredContract
 } from './contract-state'
 import {CONTRACT_TEMPLATES, PARTY_ROLES, isPartyRole, type ContractTemplate, type ContractTerms, type PartyRole} from './contract-types'
@@ -53,10 +32,16 @@ import {
   randomSecretHex,
   requestFingerprint,
   signRequest,
-  type CommitmentIntent,
   type DirectPaymentIntent,
   type SignedRequest
 } from './protocol'
+import {
+  PUBLIC_BOND_MODE,
+  assertPublicCoordinationMessageType,
+  assertPublicPacketImportDisabled,
+  cancellationRecommendation,
+  type ProtectedCancellationReason
+} from './product-policy'
 import {
   clearLegacyStore,
   clearStore,
@@ -75,17 +60,16 @@ import {assertTrustedMint, TRUSTED_MINTS} from './trust'
 const app = document.querySelector<HTMLDivElement>('#app')!
 const DEFAULT_DISCOVERY = 'https://mint.forgesworn.dev/.well-known/lnurlw/_'
 const TEMPLATE_DEFAULTS: Record<ContractTemplate, {title: string; partyA: string; partyB: string; arbiter: string}> = {
-  ride: {title: 'Point-to-point ride', partyA: 'Rider', partyB: 'Driver', arbiter: 'Ride arbiter'},
-  delivery: {title: 'Item delivery', partyA: 'Customer', partyB: 'Courier', arbiter: 'Dispatch arbiter'},
-  booking: {title: 'Reserved booking', partyA: 'Guest', partyB: 'Provider', arbiter: 'Booking arbiter'},
-  work: {title: 'Contracted work', partyA: 'Client', partyB: 'Contractor', arbiter: 'Project arbiter'},
-  custom: {title: 'Bilateral commitment', partyA: 'Party A', partyB: 'Party B', arbiter: 'Arbiter'}
+  ride: {title: 'Point-to-point ride', partyA: 'Rider', partyB: 'Driver', arbiter: 'Evidence coordinator'},
+  delivery: {title: 'Item delivery', partyA: 'Customer', partyB: 'Courier', arbiter: 'Evidence coordinator'},
+  booking: {title: 'Reserved booking', partyA: 'Guest', partyB: 'Provider', arbiter: 'Evidence coordinator'},
+  work: {title: 'Contracted work', partyA: 'Client', partyB: 'Contractor', arbiter: 'Evidence coordinator'},
+  custom: {title: 'Bilateral commitment', partyA: 'Party A', partyB: 'Party B', arbiter: 'Evidence coordinator'}
 }
 
 let store: DemoStore = loadStore()
 let incomingRequest: SignedRequest | undefined
 let incomingMessage: ContractMessage | undefined
-let incomingPacket: ContractPacket | undefined
 let incomingError = ''
 
 const esc = (value: unknown): string => String(value).replace(/[&<>'"]/g, character => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'}[character]!))
@@ -118,14 +102,12 @@ const clearFragment = (): void => {
   history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
   incomingRequest = undefined
   incomingMessage = undefined
-  incomingPacket = undefined
   incomingError = ''
 }
 
 const readIncoming = (): void => {
   incomingRequest = undefined
   incomingMessage = undefined
-  incomingPacket = undefined
   incomingError = ''
   const fragment = new URLSearchParams(window.location.hash.slice(1))
   try {
@@ -139,9 +121,9 @@ const readIncoming = (): void => {
       assertTrustedMint(incomingRequest.intent.mint)
     } else if (message) {
       incomingMessage = decodeContractMessage(message)
+      assertPublicCoordinationMessageType(incomingMessage.type)
     } else if (packet) {
-      incomingPacket = decodeContractPacket(packet, 0)
-      assertTrustedMint(incomingPacket.offer.terms.mint)
+      assertPublicPacketImportDisabled()
     }
   } catch (error) {
     incomingError = (error as Error).message
@@ -165,28 +147,15 @@ const latestDirect = (): [string, StoredRequest] | undefined => Object.entries(s
   isDirectPaymentIntent(record.intent) || (record.intent.v === 1 && record.intent.purpose === 'fare')
 )).at(-1)
 
-const latestContract = (): {offerId: string; record: StoredContract; offer: SignedContractOffer; packet?: ContractPacket} | undefined => {
+const latestContract = (): {offerId: string; record: StoredContract; offer: SignedContractOffer; packet?: string} | undefined => {
   const pair = Object.entries(store.contracts).at(-1)
   if (!pair) return undefined
   const message = decodeContractMessage(pair[1].offer, 0)
   if (message.type !== 'contract_offer') throw new Error('Stored contract offer has the wrong message type.')
-  return {offerId: pair[0], record: normaliseContract(pair[0], pair[1].offer), offer: message, ...(pair[1].packet ? {packet: decodeContractPacket(pair[1].packet, 0)} : {})}
-}
-
-const evidenceForDisplay = (packet: ContractPacket, outcomes: string[], decisions: string[]): ReturnType<typeof evaluateResolutionEvidence> => {
-  try {
-    return evaluateResolutionEvidence(packet, outcomes, decisions)
-  } catch (error) {
-    return {state: 'disputed', reason: `Stored authority refused: ${(error as Error).message}`}
-  }
+  return {offerId: pair[0], record: normaliseContract(pair[0], pair[1].offer), offer: message, ...(pair[1].packet ? {packet: pair[1].packet} : {})}
 }
 
 const localPartyRoles = (offer: SignedContractOffer): PartyRole[] => PARTY_ROLES.filter(role => store.identities[role]?.pubkey === offer.terms.participants[role])
-
-const localArbiter = (offer: SignedContractOffer): StoredIdentity | undefined => {
-  const value = store.identities.arbiter
-  return value?.pubkey === offer.terms.participants.arbiter ? value : undefined
-}
 
 const createDirectRequest = async (contractId: string, amountSats: number, discoveryInput: string): Promise<void> => {
   if (!Number.isSafeInteger(amountSats) || amountSats < 1 || amountSats > MAX_DEMO_SATS) throw new Error(`Keep each demo transfer between 1 and ${MAX_DEMO_SATS} sats.`)
@@ -217,13 +186,8 @@ const createDirectRequest = async (contractId: string, amountSats: number, disco
 }
 
 const importContractMessage = (message: ContractMessage): void => {
+  assertPublicCoordinationMessageType(message.type)
   importVerifiedContractMessage(store, message)
-  saveStore(store)
-}
-
-const importPacket = (packet: ContractPacket): void => {
-  assertTrustedMint(packet.offer.terms.mint)
-  importVerifiedContractPacket(store, packet)
   saveStore(store)
 }
 
@@ -231,20 +195,15 @@ const messageSummary = (message: ContractMessage): string => {
   if (message.type === 'contract_offer') return `contract offer · ${message.terms.title}`
   if (message.type === 'enrolment') return `${message.role.replace('_', ' ')} enrolment`
   if (message.type === 'acceptance') return `${message.role.replace('_', ' ')} acceptance`
-  if (message.type === 'funding_ack') return `${message.role.replace('_', ' ')} funding acknowledgement`
-  if (message.type === 'outcome') return `${message.outcome.replaceAll('_', ' ')} outcome`
-  if (message.type === 'arbiter_decision') return `${message.resolution.replaceAll('_', ' ')} arbiter decision`
-  if (message.type === 'settlement_notice') return `${message.beneficiary.replace('_', ' ')} settlement notice`
-  return `${message.beneficiary.replace('_', ' ')} payout acknowledgement`
+  return 'disabled value-lifecycle message'
 }
 
 const handoffHtml = (): string => {
   let incoming = ''
   if (incomingRequest) incoming = `<p class="incoming"><b>Incoming receiver request:</b> ${esc(incomingRequest.intent.amount)} sats · contract ${esc(contractIdOf(incomingRequest.intent))} · request ${esc(requestFingerprint(incomingRequest))}</p>`
   if (incomingMessage) incoming = `<p class="incoming"><b>Incoming ${esc(messageSummary(incomingMessage))}</b> · message ${esc(messageFingerprint(incomingMessage))}<button type="button" data-import-incoming-message>Verify and import</button></p>`
-  if (incomingPacket) incoming = `<p class="incoming"><b>Incoming full contract packet:</b> ${esc(incomingPacket.offer.terms.title)} · packet ${esc(packetFingerprint(incomingPacket))}<button type="button" data-import-incoming-packet>Verify every component and import</button></p>`
   if (incomingError) incoming = `<p class="incoming incoming--bad"><b>Incoming payload refused:</b> ${esc(incomingError)}</p>`
-  return `<section class="handoff" aria-label="Remote hand-off"><div><p class="eyebrow">INTERNET HAND-OFF</p><h2>Different people. Independent keys.</h2></div><p>Offers, acceptances, funding acknowledgements and outcomes travel as signed fragment links. The server never receives the fragment. Each browser revalidates every component before it changes state.</p>${incoming}</section>`
+  return `<section class="handoff" aria-label="Remote hand-off"><div><p class="eyebrow">INTERNET HAND-OFF</p><h2>Different people. Independent keys.</h2></div><p>Enrolments, offers and acceptances travel as signed fragment links. The server never receives the fragment. Bond packets and every value-lifecycle message are refused by this public build.</p>${incoming}</section>`
 }
 
 const directHtml = (): string => {
@@ -264,7 +223,7 @@ const directHtml = (): string => {
       <form data-pay-request class="card"><h3>Sender · pay</h3>
         <label>Signed request<textarea name="request" required>${esc(payerRequest)}</textarea></label>
         <label>Exact-value bearer note<textarea name="note" placeholder="lnurlw://…?k1=…" required></textarea></label>
-        <p class="micro">Use a disposable note of exactly the signed value. Commitment bonds must be funded from a complete contract packet below.</p>
+        <p class="micro">Use a disposable note of exactly the signed value. This is a direct recipient-owned payment; commitment-bond funding is disabled.</p>
         <button>Fund receiver hash</button>
       </form>
       <div class="card"><h3>Recipient · verify</h3>
@@ -284,23 +243,12 @@ const contractStatus = (contract: ReturnType<typeof latestContract>): string => 
   if (!contract) return '<p>No contract imported or created in this browser yet.</p>'
   const {offer, record, packet} = contract
   const accepted = PARTY_ROLES.map(role => Boolean(record.acceptances[role]))
-  let activation: ReturnType<typeof contractActivationState> | undefined
-  if (packet && localArbiter(offer) && PARTY_ROLES.every(role => store.requests[packet.bondRequests[role].event.id])) {
-    try { activation = contractActivationState(store, packet) } catch { /* rendered as not active and surfaced on action */ }
-  }
-  const outcomes = record.outcomes.map(encoded => {
-    const message = decodeContractMessage(encoded, 0)
-    if (message.type !== 'outcome') throw new Error('Stored outcome is malformed.')
-    const signerRole = packet ? assertOutcomeStatement(message, packet) : undefined
-    return {message, signerRole}
-  })
-  const evidence = packet ? evidenceForDisplay(packet, record.outcomes, record.decisions) : undefined
   return `<div class="contract-summary">
-    <div><p class="eyebrow">CURRENT CONTRACT</p><h3>${esc(offer.terms.title)}</h3><p>${esc(offer.terms.template)} · ${esc(offer.terms.policy.id)} · offer ${esc(offer.event.id.slice(0, 12))}</p></div>
-    <dl><div><dt>${esc(offer.terms.labels.party_a)}</dt><dd>${esc(offer.terms.bonds.party_a)} sats · ${esc(offer.terms.participants.party_a.slice(0, 12))}…</dd></div><div><dt>${esc(offer.terms.labels.party_b)}</dt><dd>${esc(offer.terms.bonds.party_b)} sats · ${esc(offer.terms.participants.party_b.slice(0, 12))}…</dd></div><div><dt>${esc(offer.terms.labels.arbiter)}</dt><dd>${esc(offer.terms.participants.arbiter.slice(0, 12))}…</dd></div></dl>
+    <div><p class="eyebrow">CURRENT EVIDENCE AGREEMENT</p><h3>${esc(offer.terms.title)}</h3><p>${esc(offer.terms.template)} · archived wire policy ${esc(offer.terms.policy.id)} · offer ${esc(offer.event.id.slice(0, 12))}</p></div>
+    <dl><div><dt>${esc(offer.terms.labels.party_a)}</dt><dd>${esc(offer.terms.bonds.party_a)} sat reference exposure · ${esc(offer.terms.participants.party_a.slice(0, 12))}…</dd></div><div><dt>${esc(offer.terms.labels.party_b)}</dt><dd>${esc(offer.terms.bonds.party_b)} sat reference exposure · ${esc(offer.terms.participants.party_b.slice(0, 12))}…</dd></div><div><dt>${esc(offer.terms.labels.arbiter)}</dt><dd>evidence coordinator only · ${esc(offer.terms.participants.arbiter.slice(0, 12))}…</dd></div></dl>
     <div class="button-row"><button class="secondary" data-copy="${esc(offer.encoded)}">Copy offer</button><button class="secondary" data-share-kind="message" data-share="${esc(offer.encoded)}">Copy offer link</button></div>
-    <ol class="state-list"><li class="${accepted[0] && accepted[1] ? 'done' : ''}">Independent acceptance · ${accepted.filter(Boolean).length}/2</li><li class="${packet ? 'done' : ''}">Exact bond packet · ${packet ? esc(packetFingerprint(packet)) : 'not created'}</li><li class="${activation?.active ? 'done' : ''}">Activation · ${activation?.active ? 'both held + both acknowledged' : 'not proved in this browser'}</li><li class="${evidence?.state === 'executable' ? 'done' : ''}">Outcome authority · ${evidence ? esc(evidence.state === 'pending' ? evidence.reason : evidence.state === 'disputed' ? `${evidence.reason}${evidence.challengeEnds ? ` Until ${new Date(evidence.challengeEnds * 1000).toLocaleTimeString()}.` : ''}` : evidence.resolution.replaceAll('_', ' ')) : 'waiting for packet'}</li></ol>
-    ${outcomes.length ? `<ul class="message-list">${outcomes.map(({message, signerRole}) => `<li><span>${esc(signerRole?.replace('_', ' ') ?? 'unknown')} signed <b>${esc(message.outcome.replaceAll('_', ' '))}</b> · ${esc(message.event.id.slice(0, 12))}</span><div class="button-row"><button class="secondary" data-copy="${esc(message.encoded)}">Copy outcome</button><button class="secondary" data-share-kind="message" data-share="${esc(message.encoded)}">Copy link</button></div></li>`).join('')}</ul>` : ''}
+    <ol class="state-list"><li class="${accepted[0] && accepted[1] ? 'done' : ''}">Independent acceptance · ${accepted.filter(Boolean).length}/2</li><li>Real bond funding · disabled</li><li>Operator value control · none</li><li>Commercial UK pilot · blocked pending written perimeter advice</li></ol>
+    ${packet ? '<p class="boundary">This browser contains a historical custodial packet. The public build will not import, fund, verify or settle it. Export any live bearer notes with the retired client before erasing local state.</p>' : ''}
   </div>`
 }
 
@@ -308,82 +256,42 @@ const acceptanceHtml = (contract: NonNullable<ReturnType<typeof latestContract>>
   const localRoles = localPartyRoles(contract.offer)
   const rows = PARTY_ROLES.map(role => {
     const encoded = contract.record.acceptances[role]
-    return `<article class="card"><h3>${esc(contract.offer.terms.labels[role])} · acceptance</h3>${encoded ? `<p>✓ Signed independently</p><textarea readonly>${esc(encoded)}</textarea><div class="button-row"><button class="secondary" data-copy="${esc(encoded)}">Copy acceptance</button><button class="secondary" data-share-kind="message" data-share="${esc(encoded)}">Copy link</button></div>` : localRoles.includes(role) ? `<p>This browser owns the named key. It will generate and persist two payout secrets before signing their hashes.</p><button data-accept-role="${role}">Accept terms and make payout targets</button>` : '<p>Waiting for the named party’s signed acceptance.</p>'}</article>`
+    return `<article class="card"><h3>${esc(contract.offer.terms.labels[role])} · acceptance</h3>${encoded ? `<p>✓ Signed independently</p><textarea readonly>${esc(encoded)}</textarea><div class="button-row"><button class="secondary" data-copy="${esc(encoded)}">Copy acceptance</button><button class="secondary" data-share-kind="message" data-share="${esc(encoded)}">Copy link</button></div>` : localRoles.includes(role) ? `<p>This browser owns the named key. The archived v2 acceptance includes private payout hashes, but this public build cannot turn them into a bond.</p><button data-accept-role="${role}">Accept evidence-only terms</button>` : '<p>Waiting for the named party’s signed acceptance.</p>'}</article>`
   }).join('')
-  return `<div class="stage"><div class="stage__heading"><span>02</span><div><h3>Parties countersign the exact offer</h3><p>The arbiter cannot substitute payout destinations later.</p></div></div><div class="two-columns">${rows}</div>${localArbiter(contract.offer) && PARTY_ROLES.every(role => contract.record.acceptances[role]) && !contract.packet ? '<button data-create-packet>Create exact bond requests and activation packet</button>' : ''}</div>`
-}
-
-const fundingCard = (contract: NonNullable<ReturnType<typeof latestContract>>, role: PartyRole): string => {
-  const packet = contract.packet!
-  const request = packet.bondRequests[role]
-  const isLocal = localPartyRoles(contract.offer).includes(role)
-  const ack = contract.record.fundingAcks[role]
-  const arbiterRecord = store.requests[request.event.id]
-  return `<article class="card"><h3>${esc(contract.offer.terms.labels[role])} · ${esc(request.intent.amount)} sat bond</h3><p>Request ${esc(request.event.id.slice(0, 12))} · ${ack ? 'payer acknowledged' : 'no payer acknowledgement'} · ${arbiterRecord?.received ? 'arbiter verified' : 'not verified here'}</p>${isLocal && !ack ? `<form data-fund-contract="${role}"><label>Exact ${esc(request.intent.amount)} sat bearer note<textarea name="note" required></textarea></label><button>Fund my signed commitment</button></form>` : ''}${ack ? `<textarea readonly>${esc(ack)}</textarea><div class="button-row"><button class="secondary" data-copy="${esc(ack)}">Copy funding ack</button><button class="secondary" data-share-kind="message" data-share="${esc(ack)}">Copy link</button></div>` : ''}${localArbiter(contract.offer) && arbiterRecord && !arbiterRecord.received ? `<button class="secondary" data-verify-bond="${role}">Arbiter probes mint output</button>` : ''}</article>`
-}
-
-const outcomeHtml = (contract: NonNullable<ReturnType<typeof latestContract>>): string => {
-  if (!contract.packet) return ''
-  const packet = contract.packet
-  const localRoles = localPartyRoles(contract.offer)
-  let activation: ReturnType<typeof contractActivationState> | undefined
-  if (localArbiter(contract.offer) && PARTY_ROLES.every(role => store.requests[packet.bondRequests[role].event.id])) {
-    try { activation = contractActivationState(store, packet) } catch { /* fail closed */ }
-  }
-  const evidence = evidenceForDisplay(packet, contract.record.outcomes, contract.record.decisions)
-  const settlementRows = contract.record.settlementNotices.map(encoded => {
-    const notice = decodeContractMessage(encoded, 0)
-    if (notice.type !== 'settlement_notice') throw new Error('Stored settlement notice is malformed.')
-    const localBeneficiary = localRoles.includes(notice.beneficiary)
-    const target = store.payoutTargets[contract.offerId]?.[notice.beneficiary]
-    const received = target?.received[notice.sourceRole]
-    const payoutAck = contract.record.payoutAcks.find(value => {
-      const message = decodeContractMessage(value, 0)
-      return message.type === 'payout_ack' && message.noticeId === notice.event.id
-    })
-    const journal = store.settlements.find(item => item.bondRequestId === notice.bondRequestId)
-    const canReconcile = Boolean(payoutAck && localArbiter(contract.offer) && journal?.state === 'ambiguous')
-    return `<li><div><b>${esc(contract.offer.terms.labels[notice.beneficiary])}</b> receives ${notice.amountMsat / 1000} sats from ${esc(contract.offer.terms.labels[notice.sourceRole])}'s bond · ${esc(notice.mutationOutcome.replaceAll('_', ' '))} · ${payoutAck ? 'beneficiary acknowledged' : 'awaiting beneficiary probe'}</div><div class="button-row"><button class="secondary" data-copy="${esc(encoded)}">Copy notice</button><button class="secondary" data-share-kind="message" data-share="${esc(encoded)}">Copy link</button></div>${localBeneficiary && target && !received ? `<button data-probe-payout="${esc(notice.event.id)}">Probe my private payout target</button>` : ''}${received ? `<textarea readonly>${esc(received.noteUrl)}</textarea><button class="secondary" data-copy="${esc(received.noteUrl)}">Copy note into wallet</button>` : ''}${payoutAck ? `<div class="button-row"><button class="secondary" data-copy="${esc(payoutAck)}">Copy payout ack</button><button class="secondary" data-share-kind="message" data-share="${esc(payoutAck)}">Copy ack link</button></div>` : ''}${canReconcile ? `<button class="secondary" data-reconcile-payout="${esc(notice.event.id)}">Reconcile acknowledged ambiguous leg</button>` : ''}</li>`
-  }).join('')
-  const setupExpired = Math.floor(Date.now() / 1000) >= contract.offer.terms.setupExpires
-  const heldCount = activation ? PARTY_ROLES.filter(role => activation!.held[role]).length : 0
-  const nowSeconds = Math.floor(Date.now() / 1000)
-  const contractExpired = nowSeconds >= contract.offer.terms.settlementExpires
-  // Two distinct no-fault exits. A dispute never becomes 'pending', so without
-  // the second test the terminal refund would be unreachable from this browser.
-  const timeoutLabel = evidence.state === 'disputed'
-    ? 'Dispute unresolved past the challenge deadline · refund both, no fault assigned'
-    : 'Settlement window expired · refund both'
-  const canTimeout = Boolean(activation?.active) && (
-    (contractExpired && evidence.state === 'pending') ||
-    (evidence.state === 'disputed' && hasTerminalRefund(packet) && nowSeconds >= disputeTerminalAt(packet))
-  )
-  return `<div class="stage"><div class="stage__heading"><span>04</span><div><h3>Imported authority moves value</h3><p>No button manufactures a party signature.</p></div></div>
-    ${localRoles.map(role => `<article class="outcome-maker"><h4>Sign as ${esc(contract.offer.terms.labels[role])}</h4><div class="outcome-actions"><button data-sign-outcome="complete" data-sign-role="${role}">Complete</button><button class="secondary" data-sign-outcome="mutual_cancel" data-sign-role="${role}">Mutual cancel</button><button class="danger" data-sign-outcome="${role}_cancel" data-sign-role="${role}">I self-cancel</button><button class="secondary" data-sign-outcome="dispute" data-sign-role="${role}">Raise dispute</button></div></article>`).join('')}
-    ${evidence.state === 'disputed' && !contractExpired && !contract.record.decisions.length && localArbiter(contract.offer) ? `<form data-create-decision class="decision-form"><h4>Arbiter decision</h4><label>Resolution<select name="resolution"><option value="refund_both">Refund both</option><option value="award_party_a">Award ${esc(contract.offer.terms.labels.party_a)}</option><option value="award_party_b">Award ${esc(contract.offer.terms.labels.party_b)}</option></select></label><label>Reason<select name="reason"><option value="no_show">No show</option><option value="service_failure">Service failure</option><option value="safety">Safety</option><option value="other">Other</option></select></label><label>Evidence summary<textarea name="evidence" required></textarea></label><button>Sign challenge-delayed decision</button></form>` : ''}
-    ${contract.record.decisions.map(decision => `<textarea readonly>${esc(decision)}</textarea><div class="button-row"><button class="secondary" data-copy="${esc(decision)}">Copy decision</button><button class="secondary" data-share-kind="message" data-share="${esc(decision)}">Copy decision link</button></div>`).join('')}
-    ${localArbiter(contract.offer) && evidence.state === 'executable' && activation?.active ? `<button data-settle-contract>Execute ${esc(evidence.resolution.replaceAll('_', ' '))} into signed payout targets</button>` : ''}
-    ${localArbiter(contract.offer) && setupExpired && heldCount > 0 && !activation?.active ? '<button class="secondary" data-abort-setup>Setup expired · refund every funded but unactivated side</button>' : ''}
-    ${localArbiter(contract.offer) && canTimeout ? `<button class="secondary" data-timeout-contract>${esc(timeoutLabel)}</button>` : ''}
-    ${settlementRows ? `<div class="payouts"><h3>Arbiter-signed settlement notices</h3><ul>${settlementRows}</ul></div>` : ''}
-  </div>`
+  return `<div class="stage"><div class="stage__heading"><span>02</span><div><h3>Parties countersign the exact offer</h3><p>This is portable evidence only. It creates no escrow and moves no money.</p></div></div><div class="two-columns">${rows}</div></div>`
 }
 
 const contractHtml = (): string => {
   let contract: ReturnType<typeof latestContract>
   try { contract = latestContract() } catch (error) { return `<section class="panel panel--bond"><p class="incoming incoming--bad">Stored contract refused: ${esc((error as Error).message)}</p></section>` }
   return `<section class="panel panel--bond" id="contract">
-    <div class="panel__heading"><div><p class="eyebrow">FLOW B · GENERIC BILATERAL COMMITMENT</p><h2>Independent people put skin in the game</h2></div><span class="assurance assurance--amber">arbiter custody</span></div>
-    <p class="panel__intro">The wire protocol knows Party A, Party B and arbiter. Ride, delivery, booking and contracted work are signed labels and templates over the same fixed policy.</p>
-    <div class="stage"><div class="stage__heading"><span>01</span><div><h3>Enrol keys and sign one canonical offer</h3><p>Do this in separate browser profiles for a real remote demonstration.</p></div></div><div class="three-columns">${enrolmentCard('party_a')}${enrolmentCard('party_b')}<article class="card"><h3>Arbiter · key</h3>${store.identities.arbiter ? `<p class="keyprint">${esc(store.identities.arbiter.pubkey.slice(0, 20))}…</p>` : '<p>The arbiter creates its own key; it never creates either party key.</p><button data-create-arbiter>Create arbiter key</button>'}</article></div>
-      <form data-create-contract class="contract-form"><h3>Arbiter creates offer</h3><label>Template<select name="template">${CONTRACT_TEMPLATES.map(value => `<option value="${value}" ${value === 'ride' ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Title<input name="title" value="${esc(TEMPLATE_DEFAULTS.ride.title)}" maxlength="100" required /></label><label>Party A label<input name="partyA" value="Rider" maxlength="40" required /></label><label>Party B label<input name="partyB" value="Driver" maxlength="40" required /></label><label>Arbiter label<input name="arbiter" value="Ride arbiter" maxlength="40" required /></label><label>Party A bond, sats<input name="bondA" type="number" min="1" max="${MAX_DEMO_SATS}" value="10" required /></label><label>Party B bond, sats<input name="bondB" type="number" min="1" max="${MAX_DEMO_SATS}" value="15" required /></label><label>Service starts in, minutes<input name="startsIn" type="number" min="16" max="43200" value="60" required /></label><label>Settlement window, hours<input name="settlementHours" type="number" min="1" max="720" value="24" required /></label><label>Challenge period, seconds<input name="challenge" type="number" min="60" max="604800" value="300" required /></label><label class="wide">Party A signed enrolment<textarea name="enrolmentA" required></textarea></label><label class="wide">Party B signed enrolment<textarea name="enrolmentB" required></textarea></label><label class="wide">Memo<textarea name="memo" maxlength="280"></textarea></label><label class="wide">Allowlisted mint<input name="mint" value="${DEFAULT_DISCOVERY}" readonly /></label><button class="wide">Create arbiter-signed offer</button></form>
+    <div class="panel__heading"><div><p class="eyebrow">FLOW B · EVIDENCE ONLY</p><h2>Independent people sign the same promise</h2></div><span class="assurance assurance--amber">real bonds disabled</span></div>
+    <p class="panel__intro">The wire protocol still proves who enrolled and exactly what each side accepted. The public build stops there: no bond packet, funding acknowledgement, outcome decision or settlement path is accepted.</p>
+    <p class="boundary"><b>UK commercial pilot blocked.</b> Moneyer does not hold keys, decide a forfeiture or move either party’s money. A written UK perimeter opinion and a genuinely non-custodial settlement primitive are required before this can become a real-money ride bond.</p>
+    <div class="stage"><div class="stage__heading"><span>01</span><div><h3>Enrol keys and sign one canonical offer</h3><p>Do this in separate browser profiles for a real remote demonstration.</p></div></div><div class="three-columns">${enrolmentCard('party_a')}${enrolmentCard('party_b')}<article class="card"><h3>Evidence coordinator · key</h3>${store.identities.arbiter ? `<p class="keyprint">${esc(store.identities.arbiter.pubkey.slice(0, 20))}…</p>` : '<p>The coordinator signs the shared offer; it never creates either party key or decides what happened.</p><button data-create-arbiter>Create coordinator key</button>'}</article></div>
+      <form data-create-contract class="contract-form"><h3>Evidence coordinator creates offer</h3><label>Template<select name="template">${CONTRACT_TEMPLATES.map(value => `<option value="${value}" ${value === 'ride' ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Title<input name="title" value="${esc(TEMPLATE_DEFAULTS.ride.title)}" maxlength="100" required /></label><label>Party A label<input name="partyA" value="Rider" maxlength="40" required /></label><label>Party B label<input name="partyB" value="Driver" maxlength="40" required /></label><label>Coordinator label<input name="arbiter" value="Evidence coordinator" maxlength="40" required /></label><label>Party A reference exposure, sats<input name="bondA" type="number" min="1" max="${MAX_DEMO_SATS}" value="10" required /></label><label>Party B reference exposure, sats<input name="bondB" type="number" min="1" max="${MAX_DEMO_SATS}" value="15" required /></label><label>Service starts in, minutes<input name="startsIn" type="number" min="16" max="43200" value="60" required /></label><label>Evidence window, hours<input name="settlementHours" type="number" min="1" max="720" value="24" required /></label><label>Review period, seconds<input name="challenge" type="number" min="60" max="604800" value="300" required /></label><label class="wide">Party A signed enrolment<textarea name="enrolmentA" required></textarea></label><label class="wide">Party B signed enrolment<textarea name="enrolmentB" required></textarea></label><label class="wide">Memo<textarea name="memo" maxlength="280"></textarea></label><label class="wide">Archived wire-format mint reference, not used<input name="mint" value="${DEFAULT_DISCOVERY}" readonly /></label><button class="wide">Create evidence-only signed offer</button></form>
     </div>
     ${contractStatus(contract)}
     ${contract ? acceptanceHtml(contract) : ''}
-    ${contract?.packet ? `<div class="stage"><div class="stage__heading"><span>03</span><div><h3>Each named payer funds its exact request</h3><p>The arbiter separately probes both outputs. Neither fact substitutes for the other.</p></div></div><textarea readonly>${esc(contract.packet.encoded)}</textarea><div class="button-row"><button class="secondary" data-copy="${esc(contract.packet.encoded)}">Copy full packet</button><button class="secondary" data-share-kind="packet" data-share="${esc(contract.packet.encoded)}">Copy packet link</button></div><div class="two-columns">${fundingCard(contract, 'party_a')}${fundingCard(contract, 'party_b')}</div></div>${outcomeHtml(contract)}` : ''}
-    <form data-import-contract class="import-form"><h3>Import a signed message or full packet</h3><label><textarea name="encoded" required></textarea></label><button>Verify and import</button></form>
+    <form data-import-contract class="import-form"><h3>Import an evidence-only signed message</h3><p>Only enrolment, offer and acceptance messages are accepted.</p><label><textarea name="encoded" required></textarea></label><button>Verify and import</button></form>
   </section>`
 }
+
+const cancellationHtml = (): string => `<section class="panel" id="cancellation">
+  <div class="panel__heading"><div><p class="eyebrow">CANCELLATION MODEL</p><h2>Compensate loss. Don’t punish.</h2></div><span class="assurance">recommendation only</span></div>
+  <p class="panel__intro">This symmetric model produces a transparent maximum recommendation. It never creates an entitlement, decides disputed facts or moves money.</p>
+  <div class="columns">
+    <form data-cancellation-model class="card"><h3>Try the schedule</h3>
+      <label>Agreed service price, sats<input name="price" type="number" min="0" step="1" value="1000" required /></label>
+      <label>Evidenced direct loss, sats<input name="loss" type="number" min="0" step="1" value="300" required /></label>
+      <label>Notice before start, minutes<input name="notice" type="number" min="0" step="1" value="12" required /></label>
+      <label>Protected reason<select name="reason"><option value="none">None</option><option value="safety">Safety</option><option value="emergency">Emergency</option><option value="force_majeure">Force majeure</option><option value="mutual">Mutual agreement</option></select></label>
+      <button>Calculate maximum recommendation</button>
+    </form>
+    <article class="card cancellation-result" data-cancellation-result><h3>Current result</h3><p class="recommendation">Enter the facts and calculate.</p><p class="micro">The same schedule applies whether rider or driver cancels.</p></article>
+    <article class="card"><h3>Guardrails</h3><ul class="plain-list"><li>30+ minutes or a protected reason: zero.</li><li>5–29 minutes: lower of evidenced direct loss and 25% of price.</li><li>Under 5 minutes or no-show: lower of evidenced direct loss and 50% of price.</li><li>Safety, emergency, force majeure and mutual agreement override timing.</li><li>Written UK advice is still required before commercial use.</li></ul></article>
+  </div>
+</section>`
 
 const recoveryHtml = (): string => {
   const legacy = legacyRecoveryJson()
@@ -392,9 +300,9 @@ const recoveryHtml = (): string => {
 }
 
 const render = (): void => {
-  app.innerHTML = `<header class="hero"><div class="hero__mark" aria-hidden="true">CC</div><div><p class="eyebrow">LNURLCASH CONTRACTS LAB</p><h1>Real sats. Explicit authority.</h1><p class="lede">A live protocol lab for recipient-owned payments and portable bilateral commitments. The arbiter is still a custodian; the parties are no longer simulated.</p><p class="custody-note">“Real sats” means live bearer liabilities at a mint. Keep every experiment tiny and disposable.</p></div><span class="live-pill"><i></i> remote protocol v2</span></header>
-  <main>${handoffHtml()}<section class="truth-grid"><article><span>01</span><h2>Neutral core</h2><p>Party A, Party B and arbiter. Human labels are signed display terms, never authority.</p></article><article><span>02</span><h2>Separate authority</h2><p>Each person enrols, accepts, funds and signs outcomes on their own device.</p></article><article><span>03</span><h2>Private payouts</h2><p>Beneficiaries precommit two unique output hashes. The arbiter never learns those spend secrets.</p></article></section>${directHtml()}${contractHtml()}<section class="attack-lab"><div><p class="eyebrow">ATTACK LAB</p><h2>What now fails closed</h2></div><ul><li><b>Relabel a role:</b> authority follows neutral signed roles, not display text.</li><li><b>Invent acceptance or outcomes:</b> imported events must come from exact enrolled keys.</li><li><b>Fork valid state:</b> a second offer, acceptance, packet or source-bond notice cannot replace the first.</li><li><b>Lose payout continuity:</b> a named party cannot fund unless its two local secrets still match its packet acceptance.</li><li><b>Donate anonymously:</b> activation needs both mint outputs and named-payer acknowledgements.</li><li><b>Swap a payout:</b> every input uses a distinct hash countersigned before funding.</li><li><b>Replay another contract:</b> messages bind offer id and exact bond-set hash.</li><li><b>Suppress a dispute:</b> dispute authority outranks ordinary outcomes; pre-signed or conflicting decisions cannot settle.</li><li><b>Use silence as guilt:</b> silence freezes; an attributable decision waits through the signed challenge period.</li><li><b>Malicious arbiter or JavaScript:</b> still able to steal held bonds before settlement. That remains the hard custody boundary.</li></ul></section>${recoveryHtml()}</main>
-  <footer><span>Experimental · bilateral-arbiter-v2 · 500 sat hard cap</span><button class="text-button" data-reset>Erase this browser’s v2 secrets</button></footer><div data-status class="status" role="status" aria-live="polite">Ready. Use tiny disposable notes only.</div>`
+  app.innerHTML = `<header class="hero"><div class="hero__mark" aria-hidden="true">CC</div><div><p class="eyebrow">MONEYER PROTOCOL LAB</p><h1>Real payments. No platform custody.</h1><p class="lede">A live lab for recipient-owned LNURLcash payments and remotely signed bilateral evidence. New arbiter-held bonds are disabled.</p><p class="custody-note">The earlier 20-sat custodial completion remains reproducible historical evidence. It is not an invitation to fund another one.</p></div><span class="live-pill"><i></i> evidence-only v1</span></header>
+  <main>${handoffHtml()}<section class="truth-grid"><article><span>01</span><h2>Direct money</h2><p>Real sats may move only to a recipient-owned output. Moneyer never gets the spend secret.</p></article><article><span>02</span><h2>Portable evidence</h2><p>Each person enrols and accepts on their own device. Signed evidence is not physical-world truth.</p></article><article><span>03</span><h2>Hard stop</h2><p>Bond packets, funding, forfeiture decisions and settlements are rejected by the public build.</p></article></section>${directHtml()}${contractHtml()}${cancellationHtml()}<section class="attack-lab"><div><p class="eyebrow">PUBLIC BOUNDARY</p><h2>What now fails closed</h2></div><ul><li><b>Import a bond packet:</b> refused before it enters browser state.</li><li><b>Import funding or settlement authority:</b> refused by message type.</li><li><b>Ask Moneyer to decide a forfeiture:</b> there is no public decision or execution path.</li><li><b>Use a blanket cancellation penalty:</b> the model caps recommendations by evidenced direct loss and timing.</li><li><b>Cancel for safety or emergency:</b> protected reasons return zero regardless of timing.</li><li><b>Pretend a signature proves the ride:</b> signatures prove authorship and agreed text, not real-world events.</li><li><b>Turn a cap into legal clearance:</b> the UK commercial pilot remains blocked pending written specialist advice.</li><li><b>Modify delivered JavaScript:</b> cannot make Moneyer a custodian because the public bundle contains no bond funding or settlement calls.</li></ul></section>${recoveryHtml()}</main>
+  <footer><span>Experimental · ${esc(PUBLIC_BOND_MODE.id)} · real bonds disabled</span><button class="text-button" data-reset>Erase this browser’s lab secrets</button></footer><div data-status class="status" role="status" aria-live="polite">Ready. Direct payments only; bilateral value movement is disabled.</div>`
   bind()
 }
 
@@ -408,84 +316,6 @@ const run = async (event: Event | null, work: (form: HTMLFormElement) => Promise
   } catch (error) {
     status((error as Error).message, 'bad')
   }
-}
-
-const createPacket = (): void => {
-  const contract = latestContract()
-  if (!contract) throw new Error('No contract offer is selected.')
-  if (contract.record.packet) throw new Error('This offer already has a canonical bond packet.')
-  assertOfferOpen(contract.offer)
-  const arbiter = localArbiter(contract.offer)
-  if (!arbiter) throw new Error('This browser does not own the named arbiter key.')
-  const acceptances = {} as ContractPacket['acceptances']
-  for (const role of PARTY_ROLES) {
-    const encoded = contract.record.acceptances[role]
-    if (!encoded) throw new Error('Both participant acceptances are required first.')
-    const message = decodeContractMessage(encoded, 0)
-    if (message.type !== 'acceptance') throw new Error('A stored acceptance has the wrong type.')
-    assertAcceptance(message, contract.offer)
-    acceptances[role] = message
-  }
-  const staged = {} as Record<PartyRole, {signed: SignedRequest; receiverSecretHex: string}>
-  for (const role of PARTY_ROLES) {
-    const receiverSecretHex = randomSecretHex()
-    const intent: CommitmentIntent = {
-      v: 2,
-      contractId: contract.offer.terms.contractId,
-      revision: 1,
-      purpose: 'commitment',
-      receiverRole: 'arbiter',
-      payerRole: role,
-      offerId: contract.offer.event.id,
-      participants: contract.offer.terms.participants,
-      amount: contract.offer.terms.bonds[role],
-      currency: 'sat',
-      mint: contract.offer.terms.mint,
-      outputHash: outputHashOf(receiverSecretHex),
-      expires: contract.offer.terms.setupExpires,
-      memo: `${contract.offer.terms.labels[role]} commitment bond`
-    }
-    staged[role] = {signed: signRequest(intent, arbiter.secretHex), receiverSecretHex}
-  }
-  for (const role of PARTY_ROLES) store.requests[staged[role].signed.event.id] = {encoded: staged[role].signed.encoded, intent: staged[role].signed.intent, receiverSecretHex: staged[role].receiverSecretHex}
-  saveStore(store)
-  const packetEncoded = encodeContractPacket({offer: contract.offer, acceptances, bondRequests: {party_a: staged.party_a.signed, party_b: staged.party_b.signed}})
-  contract.record.packet = packetEncoded
-  saveStore(store)
-}
-
-const settlementNoticeReceipt = (notice: SignedSettlementNotice, mintHost: string): SettlementReceipt => ({
-  amountMsat: notice.amountMsat,
-  mintHost,
-  outputHash: notice.outputHash,
-  ...(notice.mintSignature ? {signature: notice.mintSignature} : {}),
-  outcome: notice.mutationOutcome,
-  createdAt: notice.event.created_at * 1000
-})
-
-const issueSettlementNotices = (contract: NonNullable<ReturnType<typeof latestContract>>): void => {
-  if (!contract.packet) return
-  const arbiter = localArbiter(contract.offer)
-  if (!arbiter) return
-  for (const settlement of store.settlements) {
-    const sourceRole = PARTY_ROLES.find(role => contract.packet!.bondRequests[role].event.id === settlement.bondRequestId)
-    if (!sourceRole || !settlement.receipt) continue
-    const already = contract.record.settlementNotices.some(encoded => {
-      const message = decodeContractMessage(encoded, 0)
-      return message.type === 'settlement_notice' && message.bondRequestId === settlement.bondRequestId
-    })
-    if (already) continue
-    const notice = signSettlementNotice(contract.packet, {
-      sourceRole,
-      beneficiary: settlement.beneficiary,
-      outputHash: settlement.outputHash,
-      amountMsat: settlement.receipt.amountMsat,
-      mutationOutcome: settlement.receipt.outcome,
-      ...(settlement.receipt.signature ? {mintSignature: settlement.receipt.signature} : {})
-    }, arbiter.secretHex)
-    contract.record.settlementNotices.push(notice.encoded)
-  }
-  saveStore(store)
 }
 
 const bind = (): void => {
@@ -504,18 +334,6 @@ const bind = (): void => {
     render()
     status('Signed contract message verified and imported.')
   }))
-  document.querySelector<HTMLElement>('[data-import-incoming-packet]')?.addEventListener('click', () => void run(null, async () => {
-    if (!incomingPacket) throw new Error('No incoming packet is available.')
-    const packet = incomingPacket
-    await withExclusiveBrowserLock(`contract:${packet.offer.event.id}`, async () => {
-      store = loadStore()
-      importPacket(packet)
-    }, {requireCrossContext: true})
-    clearFragment()
-    render()
-    status('Every signed packet component verified and imported.')
-  }))
-
   document.querySelector<HTMLFormElement>('[data-create-payment]')?.addEventListener('submit', event => void run(event, async form => {
     const data = formData(form)
     const contractId = String(data.get('contractId'))
@@ -571,13 +389,13 @@ const bind = (): void => {
     store.enrolments[role] = signEnrolment(role, local.secretHex).encoded
     saveStore(store)
     render()
-    status(`${role.replace('_', ' ')} enrolment signed. Share it with the arbiter.`)
+    status(`${role.replace('_', ' ')} enrolment signed. Share it with the evidence coordinator.`)
   })))
 
   document.querySelector<HTMLElement>('[data-create-arbiter]')?.addEventListener('click', () => {
     identity('arbiter', true)
     render()
-    status('Arbiter key created in this browser only.')
+    status('Evidence coordinator key created in this browser only.')
   })
 
   document.querySelector<HTMLSelectElement>('[data-create-contract] select[name="template"]')?.addEventListener('change', event => {
@@ -623,7 +441,7 @@ const bind = (): void => {
     normaliseContract(offer.event.id, offer.encoded)
     saveStore(store)
     render()
-    status('Canonical offer signed by the arbiter. Both parties must independently accept it.')
+    status('Canonical offer signed by the evidence coordinator. Both parties must independently accept it.')
   }))
 
   document.querySelectorAll<HTMLElement>('[data-accept-role]').forEach(button => button.addEventListener('click', () => void run(null, async () => {
@@ -669,226 +487,30 @@ const bind = (): void => {
       saveStore(store)
     }, {requireCrossContext: true})
     render()
-    status(`${contract.offer.terms.labels[role]} accepted. Two private payout secrets remain in this browser.`)
+    status(`${contract.offer.terms.labels[role]} accepted the evidence-only offer. No bond was created or funded.`)
   })))
 
-  document.querySelector<HTMLElement>('[data-create-packet]')?.addEventListener('click', () => void run(null, async () => {
-    const contract = latestContract()
-    if (!contract) throw new Error('No contract offer is selected.')
-    await withExclusiveBrowserLock(`contract:${contract.offerId}`, async () => {
-      store = loadStore()
-      createPacket()
-    }, {requireCrossContext: true})
-    render()
-    status('Both arbiter-held receiver secrets were persisted before the full signed packet was shown.')
-  }))
-
-  document.querySelectorAll<HTMLFormElement>('[data-fund-contract]').forEach(form => form.addEventListener('submit', event => void run(event, async submitted => {
-    const role = submitted.dataset.fundContract
-    if (!isPartyRole(role)) throw new Error('Unknown funding role.')
-    const contract = latestContract()
-    if (!contract?.packet) throw new Error('Import the full contract packet first.')
-    const livePacket = decodeContractPacket(contract.packet.encoded, Math.floor(Date.now() / 1000))
-    // A packet built by an older client bypasses the guards on acceptance and
-    // packaging, so refuse before the note moves rather than after.
-    assertCurrentPolicy(livePacket.offer)
-    const local = store.identities[role]
-    if (!local || local.pubkey !== livePacket.offer.terms.participants[role]) throw new Error('This browser does not own the named payer key.')
-    const noteInput = String(formData(submitted).get('note'))
-    const noteUrl = resolveNoteInput(noteInput)
-    const spendSecret = noteUrl ? noteK1(noteUrl) : null
-    if (!spendSecret) throw new Error('That is not an LNURLcash bearer note.')
-    const request = livePacket.bondRequests[role]
-    if (!confirm(`Commit ${request.intent.amount} sats as ${livePacket.offer.terms.labels[role]}?\n\nOffer: ${livePacket.offer.event.id.slice(0, 16)}…\nBond set: ${livePacket.bondSetHash.slice(0, 16)}…\nMint: ${request.intent.mint.host}`)) return
-    let receipt: FundingReceipt | undefined
-    await withExclusiveBrowserLock(`request:${request.event.id}`, async () => {
-      await withExclusiveBrowserLock(`spend:${hashK1(spendSecret)}`, async () => {
-        store = loadStore()
-        assertLocalParticipantPacketContinuity(store, livePacket)
-        const currentLocal = store.identities[role]
-        if (!currentLocal || currentLocal.pubkey !== livePacket.offer.terms.participants[role]) throw new Error('The named payer key changed before funding.')
-        receipt = await fundReceiverLockedRequest(request, noteInput)
-        store = loadStore()
-        assertLocalParticipantPacketContinuity(store, livePacket)
-        const current = normaliseContract(livePacket.offer.event.id, livePacket.offer.encoded)
-        const localRequest = store.requests[request.event.id]
-        if (localRequest) localRequest.receipt = receipt
-        current.fundingAcks[role] = signFundingAcknowledgement(livePacket, role, currentLocal.secretHex).encoded
-        saveStore(store)
-      }, {requireCrossContext: true})
-    }, {requireCrossContext: true})
-    render()
-    status(receipt!.outcome === 'confirmed' ? 'Funding submitted and a named-payer acknowledgement signed. The arbiter must still probe.' : 'Funding response was lost. Acknowledgement says submitted; the arbiter must probe before activation.', receipt!.outcome === 'confirmed' ? 'ok' : 'warn')
-  })))
-
-  document.querySelectorAll<HTMLElement>('[data-verify-bond]').forEach(button => button.addEventListener('click', () => void run(null, async () => {
-    const role = button.dataset.verifyBond
-    if (!isPartyRole(role)) throw new Error('Unknown bond role.')
-    const contract = latestContract()
-    if (!contract?.packet || !localArbiter(contract.offer)) throw new Error('This browser is not the named arbiter.')
-    const request = contract.packet.bondRequests[role]
-    const record = store.requests[request.event.id]
-    if (!record) throw new Error('The arbiter receiver secret is not stored here.')
-    record.received = await receiveLockedPayment(request, record.receiverSecretHex, record.receipt)
-    saveStore(store)
-    render()
-    status(`Arbiter independently verified ${request.intent.amount} sats for ${contract.offer.terms.labels[role]}.`)
-  })))
-
-  document.querySelectorAll<HTMLElement>('[data-sign-outcome]').forEach(button => button.addEventListener('click', () => void run(null, async () => {
-    const role = button.dataset.signRole
-    if (!isPartyRole(role)) throw new Error('Unknown signer role.')
-    const contract = latestContract()
-    if (!contract?.packet) throw new Error('No contract packet is selected.')
-    const outcome = String(button.dataset.signOutcome) as Parameters<typeof signOutcomeStatement>[1]
-    await withExclusiveBrowserLock(`contract:${contract.offerId}`, async () => {
-      store = loadStore()
-      const current = latestContract()
-      if (!current?.packet || current.offerId !== contract.offerId) throw new Error('The selected contract changed before the outcome was signed.')
-      const local = store.identities[role]
-      if (!local || local.pubkey !== current.offer.terms.participants[role]) throw new Error('This browser does not own that participant key.')
-      assertLocalParticipantPacketContinuity(store, current.packet)
-      const statement = signOutcomeStatement(current.packet, outcome, local.secretHex)
-      if (!current.record.outcomes.some(encoded => decodeContractMessage(encoded, 0).event.id === statement.event.id)) current.record.outcomes.push(statement.encoded)
-      saveStore(store)
-    }, {requireCrossContext: true})
-    render()
-    status(`${contract.offer.terms.labels[role]} signed ${outcome.replaceAll('_', ' ')}. Share that message with the arbiter.`)
-  })))
-
-  document.querySelector<HTMLFormElement>('[data-create-decision]')?.addEventListener('submit', event => void run(event, async form => {
-    const contract = latestContract()
-    if (!contract?.packet) throw new Error('No contract packet is selected.')
+  document.querySelector<HTMLFormElement>('[data-cancellation-model]')?.addEventListener('submit', event => void run(event, async form => {
     const data = formData(form)
-    await withExclusiveBrowserLock(`contract:${contract.offerId}`, async () => {
-      store = loadStore()
-      const current = latestContract()
-      if (!current?.packet || current.offerId !== contract.offerId) throw new Error('The selected contract changed before the decision was signed.')
-      const arbiter = localArbiter(current.offer)
-      if (!arbiter) throw new Error('This browser is not the named arbiter.')
-      if (current.record.decisions.length) throw new Error('An arbiter decision is already signed for this dispute.')
-      if (evaluateResolutionEvidence(current.packet, current.record.outcomes, []).state !== 'disputed') throw new Error('There is no unresolved signed dispute to decide.')
-      const evidenceHash = bytesToHex(sha256(new TextEncoder().encode(String(data.get('evidence')))))
-      const decision = signArbiterDecision(
-        current.packet,
-        String(data.get('resolution')) as Parameters<typeof signArbiterDecision>[1],
-        evidenceHash,
-        String(data.get('reason')) as Parameters<typeof signArbiterDecision>[3],
-        arbiter.secretHex
-      )
-      current.record.decisions.push(decision.encoded)
-      saveStore(store)
-    }, {requireCrossContext: true})
-    render()
-    status(`Decision signed. Value remains frozen for the ${contract.offer.terms.policy.challengeSeconds}-second challenge period.`, 'warn')
+    const recommendation = cancellationRecommendation({
+      agreedPriceSats: Number(data.get('price')),
+      evidencedDirectLossSats: Number(data.get('loss')),
+      noticeMinutes: Number(data.get('notice')),
+      protectedReason: String(data.get('reason')) as ProtectedCancellationReason
+    })
+    const output = document.querySelector<HTMLElement>('[data-cancellation-result]')
+    if (!output) throw new Error('The cancellation result panel is missing.')
+    output.innerHTML = `<h3>Maximum recommendation</h3><p class="recommendation"><b>${recommendation.maximumSats} sats</b></p><p>${esc(recommendation.explanation)}</p><p class="micro">Money moved by this calculator: no. This is not a finding of liability.</p>`
+    status(`Maximum recommendation: ${recommendation.maximumSats} sats. No money moved.`)
   }))
-
-  document.querySelector<HTMLElement>('[data-settle-contract]')?.addEventListener('click', () => void run(null, async () => {
-    const contract = latestContract()
-    if (!contract?.packet || !localArbiter(contract.offer)) throw new Error('This browser is not the named arbiter.')
-    await withExclusiveBrowserLock(`contract:${contract.offerId}`, async () => {
-      store = loadStore()
-      const current = latestContract()!
-      try {
-        await resolveHeldCommitments(store, current.packet!, {kind: 'messages', outcomes: current.record.outcomes, decisions: current.record.decisions}, {persist: saveStore, redirect: redirectHeldNoteToHash})
-      } finally {
-        issueSettlementNotices(latestContract()!)
-      }
-    }, {requireCrossContext: true})
-    render()
-    status('Held inputs were redirected only to the beneficiaries’ pre-signed per-input hashes. Share the settlement notices for private probing.', 'warn')
-  }))
-
-  document.querySelector<HTMLElement>('[data-abort-setup]')?.addEventListener('click', () => void run(null, async () => {
-    const contract = latestContract()
-    if (!contract?.packet || !localArbiter(contract.offer)) throw new Error('This browser is not the named arbiter.')
-    await withExclusiveBrowserLock(`contract:${contract.offerId}`, async () => {
-      store = loadStore()
-      const current = latestContract()!
-      try {
-        await resolveHeldCommitments(store, current.packet!, {kind: 'setup_timeout'}, {persist: saveStore, redirect: redirectHeldNoteToHash})
-      } finally {
-        issueSettlementNotices(latestContract()!)
-      }
-    }, {requireCrossContext: true})
-    render()
-    status('The only funded setup bond was returned to its owner’s pre-signed target.')
-  }))
-
-  document.querySelector<HTMLElement>('[data-timeout-contract]')?.addEventListener('click', () => void run(null, async () => {
-    const contract = latestContract()
-    if (!contract?.packet || !localArbiter(contract.offer)) throw new Error('This browser is not the named arbiter.')
-    await withExclusiveBrowserLock(`contract:${contract.offerId}`, async () => {
-      store = loadStore()
-      const current = latestContract()!
-      try {
-        await resolveHeldCommitments(store, current.packet!, {kind: 'contract_timeout', outcomes: current.record.outcomes, decisions: current.record.decisions}, {persist: saveStore, redirect: redirectHeldNoteToHash})
-      } finally {
-        issueSettlementNotices(latestContract()!)
-      }
-    }, {requireCrossContext: true})
-    render()
-    status('The unresolved contract timed out without assigning guilt. Both bonds were returned to their signed owners.')
-  }))
-
-  document.querySelectorAll<HTMLElement>('[data-probe-payout]').forEach(button => button.addEventListener('click', () => void run(null, async () => {
-    const contract = latestContract()
-    if (!contract?.packet) throw new Error('No contract packet is selected.')
-    const encoded = contract.record.settlementNotices.find(value => decodeContractMessage(value, 0).event.id === button.dataset.probePayout)
-    if (!encoded) throw new Error('Settlement notice not found.')
-    const message = decodeContractMessage(encoded, 0)
-    if (message.type !== 'settlement_notice') throw new Error('The selected message is not a settlement notice.')
-    assertSettlementNotice(message, contract.packet)
-    const local = store.identities[message.beneficiary]
-    if (!local || local.pubkey !== contract.offer.terms.participants[message.beneficiary]) throw new Error('This browser does not own the named beneficiary key.')
-    const target = store.payoutTargets[contract.offerId]?.[message.beneficiary]
-    if (!target) throw new Error('This browser has no private payout secrets for that acceptance.')
-    const secret = target.secrets[message.sourceRole]
-    if (outputHashOf(secret) !== message.outputHash) throw new Error('The stored payout secret does not match the signed settlement target.')
-    target.received[message.sourceRole] = await receiveRedirectedPayout(contract.offer.terms.mint, message.amountMsat, secret, settlementNoticeReceipt(message, contract.offer.terms.mint.host))
-    const beneficiaryIdentity = store.identities[message.beneficiary]
-    if (!beneficiaryIdentity) throw new Error('The beneficiary signing key is not stored here.')
-    const acknowledgement = signPayoutAcknowledgement(message, contract.packet, beneficiaryIdentity.secretHex)
-    if (!contract.record.payoutAcks.some(encoded => decodeContractMessage(encoded, 0).event.id === acknowledgement.event.id)) contract.record.payoutAcks.push(acknowledgement.encoded)
-    saveStore(store)
-    render()
-    status('Beneficiary independently found the redirected payout. Import and rotate it in a proper wallet.')
-  })))
-
-  document.querySelectorAll<HTMLElement>('[data-reconcile-payout]').forEach(button => button.addEventListener('click', () => void run(null, async () => {
-    const contract = latestContract()
-    if (!contract?.packet || !localArbiter(contract.offer)) throw new Error('This browser is not the named arbiter.')
-    await withExclusiveBrowserLock(`contract:${contract.offerId}`, async () => {
-      store = loadStore()
-      const current = latestContract()
-      if (!current?.packet || current.offerId !== contract.offerId) throw new Error('The selected contract changed before reconciliation.')
-      const noticeEncoded = current.record.settlementNotices.find(value => decodeContractMessage(value, 0).event.id === button.dataset.reconcilePayout)
-      if (!noticeEncoded) throw new Error('Settlement notice not found.')
-      const notice = decodeContractMessage(noticeEncoded, 0)
-      if (notice.type !== 'settlement_notice') throw new Error('The selected message is not a settlement notice.')
-      const acknowledgementEncoded = current.record.payoutAcks.find(value => {
-        const message = decodeContractMessage(value, 0)
-        return message.type === 'payout_ack' && message.noticeId === notice.event.id
-      })
-      if (!acknowledgementEncoded) throw new Error('No beneficiary payout acknowledgement has been imported.')
-      const acknowledgement = decodeContractMessage(acknowledgementEncoded, 0)
-      if (acknowledgement.type !== 'payout_ack') throw new Error('The selected acknowledgement has the wrong type.')
-      applyPayoutAcknowledgement(store, current.packet, notice, acknowledgement, saveStore)
-    }, {requireCrossContext: true})
-    render()
-    status('The beneficiary acknowledgement reconciled the ambiguous leg. Settlement may now resume.')
-  })))
 
   document.querySelector<HTMLFormElement>('[data-import-contract]')?.addEventListener('submit', event => void run(event, async form => {
     const encoded = String(formData(form).get('encoded')).trim()
     if (encoded.startsWith('cashpacket1')) {
-      const packet = decodeContractPacket(encoded, 0)
-      await withExclusiveBrowserLock(`contract:${packet.offer.event.id}`, async () => {
-        store = loadStore()
-        importPacket(packet)
-      }, {requireCrossContext: true})
+      assertPublicPacketImportDisabled()
     } else {
       const message = decodeContractMessage(encoded)
+      assertPublicCoordinationMessageType(message.type)
       const offerId = message.type === 'contract_offer' ? message.event.id : message.type === 'enrolment' ? message.event.id : message.offerId
       await withExclusiveBrowserLock(`contract:${offerId}`, async () => {
         store = loadStore()
@@ -896,7 +518,7 @@ const bind = (): void => {
       }, {requireCrossContext: true})
     }
     render()
-    status('Signed payload verified and imported.')
+    status('Evidence-only signed message verified and imported.')
   }))
 
   document.querySelector<HTMLElement>('[data-copy-legacy]')?.addEventListener('click', () => void copy(legacyRecoveryJson() ?? ''))
@@ -907,11 +529,11 @@ const bind = (): void => {
     status('Earlier inspector store erased.', 'warn')
   })
   document.querySelector<HTMLElement>('[data-reset]')?.addEventListener('click', () => {
-    if (!confirm('Erase this browser’s v2 keys, receiver secrets, payout secrets and settlement records? Export any live notes first.')) return
+    if (!confirm('Erase this browser’s lab keys and local signed evidence? Export any direct-payment notes first.')) return
     clearStore()
     store = loadStore()
     render()
-    status('This browser’s v2 lab state was erased.', 'warn')
+    status('This browser’s lab state was erased.', 'warn')
   })
 }
 
