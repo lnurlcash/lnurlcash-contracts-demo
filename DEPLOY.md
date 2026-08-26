@@ -4,24 +4,24 @@
 
 - `labs.moneyer.dev` has an A record for `2.29.14.244`.
 - `https://labs.moneyer.dev` is live; plain HTTP redirects to HTTPS.
-- Release commit: `5dd787c9bff4`.
-- Static release: `/opt/moneyer-labs/releases/20260826T101119Z-5dd787c9bff4`.
+- Release commit: `1fa51a425dea`.
+- Static release: `/opt/moneyer-labs/releases/20260826T104505Z-1fa51a425dea`.
 - Live symlink: `/opt/moneyer-labs/current`.
 - Caddy configuration unchanged at this release; the live `labs.moneyer.dev` vhost is byte-identical to `deploy/labs.moneyer.dev.Caddyfile`, so no reload was performed.
-- Immediate static rollback: `/opt/moneyer-labs/releases/20260826T085016Z-09e842f6818a`.
+- Immediate static rollback: `/opt/moneyer-labs/releases/20260826T101119Z-5dd787c9bff4`.
 
 The public files verified byte-for-byte after deployment:
 
 ```text
-7ac2a96079296ec1d5bf5423672596b56d23006b5cc6c867af537ece1c1a5ef7  index.html
+366bc5e36e76483fdaa767f8371470d47515979bba2fe6db6c10d3ff60915083  index.html
 2c16fbbcace9e2853d4aa125e24443d77ed8c92fb010e2fb4ea9035ac9ef2dcb  favicon.svg
 605e92b0a23b293e2c542964f0103614542c0c0c67bb61919ea07a593d3867c4  assets/index-CRR9bfEb.css
-d3ffb1226a6e182c4f68440d6e845000b6ebd3f48c33418471399c0e4bcd115b  assets/index-q3YT0H6l.js
+5a6b52c16b9e5b2871a52c33107e7046cb875cdc9b48e6d75a3e2f9206905644  assets/index-vuHEJJUk.js
 ```
 
-This release retires the public `bilateral-arbiter-v2` custody and settlement path. It passed 94 tests and the Node 24 production build. The public bundle now accepts only signed enrolment, offer and acceptance evidence; it contains no bond-funding, outcome-decision or settlement controls. Historical packet import is refused. The page identifies Moneyer as the publisher of protocol research and static demo source, not the operator of a ride, payment or escrow service, and assigns deployment-specific terms and legal assessment to whoever operates an implementation.
+This release keeps the public `bilateral-arbiter-v2` custody and settlement path retired and corrects the publisher/service framing. It passed 94 tests and the Node 24 production build. The public bundle accepts only signed enrolment, offer and acceptance evidence; it contains no bond-funding, outcome-decision or settlement controls. Historical packet import is refused. The page identifies Moneyer as the publisher of protocol research and static demo source, not the operator of a ride, payment or escrow service, and assigns deployment-specific terms and legal assessment to whoever operates an implementation.
 
-The repository-owned browser gate passed locally and against the public HTTPS origin with live pinned mint discovery. Three isolated profiles produced two enrolments and two independent acceptances; the page exposed zero bond-funding and zero settlement controls; a historical custodial packet was visibly refused; the cancellation calculator rendered both the evidenced-loss cap and a zero safety outcome; and a direct recipient-owned request remained available. The hostile-mint matrix refused callback and signing-key substitution, spent-note replay, malformed and oversized bodies and a provably unsendable callback; it recovered an applied mutation with a lost response and made zero automatic mutation retries. Both public browser runs reported zero console errors and `realSatsMoved: false`.
+The repository-owned browser gate passed locally and against the public HTTPS origin with live pinned mint discovery. Three isolated profiles produced two enrolments and two independent acceptances; the publisher/implementer boundary was visible and the retired blanket UK block was absent; the page exposed zero bond-funding and zero settlement controls; a historical custodial packet was visibly refused; the cancellation calculator rendered both the evidenced-loss cap and a zero safety outcome; and a direct recipient-owned request remained available. The hostile-mint matrix refused callback and signing-key substitution, spent-note replay, malformed and oversized bodies and a provably unsendable callback; it recovered an applied mutation with a lost response and made zero automatic mutation retries. Both public browser runs reported zero console errors and `realSatsMoved: false`.
 
 The earlier 25-sat funded run remains useful historical protocol evidence: 23 sats were minted, two 10-sat bonds completed and settled, and 20 sats returned. Its runner has been removed from the public release. That run does not establish non-custodial operation, a cancellation entitlement, physical-world truth or the legal position of any future operator.
 
