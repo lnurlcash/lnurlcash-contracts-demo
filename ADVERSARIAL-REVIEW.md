@@ -1,6 +1,6 @@
 # Adversarial review
 
-> **Archived custody research.** The findings below describe the retired `bilateral-arbiter-v2` implementation and its historical funded acceptance. The public build no longer creates or imports bond packets and contains no bond funding, decision or settlement controls. Current product gates are in [docs/UK-PILOT-GATE.md](docs/UK-PILOT-GATE.md).
+> **Archived custody research.** The findings below describe the retired `bilateral-arbiter-v2` implementation and its historical funded acceptance. The public build no longer creates or imports bond packets and contains no bond funding, decision or settlement controls. The protocol-publisher and deployment distinction is in [docs/IMPLEMENTER-BOUNDARY.md](docs/IMPLEMENTER-BOUNDARY.md).
 
 Reviewed against the hardened v2 source, three independent browser profiles and the stateful hostile-mint gates on 26 August 2026.
 

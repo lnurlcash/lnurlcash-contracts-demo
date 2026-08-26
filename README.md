@@ -9,11 +9,11 @@ The public build now has a hard product boundary:
 3. The flow stops before custody. Bond packets, funding acknowledgements, arbiter decisions and settlement messages are rejected.
 4. A symmetric cancellation calculator recommends a maximum based on notice and evidenced direct loss. It does not decide liability or move money.
 
-The UK commercial ride-bond pilot is blocked pending written specialist advice and a genuinely non-custodial settlement primitive. See [docs/UK-PILOT-GATE.md](docs/UK-PILOT-GATE.md) and [docs/NON-CUSTODIAL-RIDE-BONDS.md](docs/NON-CUSTODIAL-RIDE-BONDS.md).
+This is published protocol research and runnable demo source, not a Moneyer-operated ride, payment or escrow service. An implementer that turns the protocol into a customer service is responsible for that deployment's terms, controls and legal position. See [docs/IMPLEMENTER-BOUNDARY.md](docs/IMPLEMENTER-BOUNDARY.md) and [docs/NON-CUSTODIAL-RIDE-BONDS.md](docs/NON-CUSTODIAL-RIDE-BONDS.md).
 
 ## Why the custody path was retired
 
-The earlier `bilateral-arbiter-v2` research made the arbiter custodian of both bearer secrets. Participant signatures constrained the honest client, and beneficiaries kept private payout secrets, but the arbiter could still steal held bonds. A 25-sat funded acceptance completed once: 23 sats were minted after fees, two 10-sat bonds completed and settled, and 20 sats returned. That is useful historical protocol evidence. It is not a safe commercial escrow design and the funded runner has been removed.
+The earlier `bilateral-arbiter-v2` research made the arbiter custodian of both bearer secrets. Participant signatures constrained the honest client, and beneficiaries kept private payout secrets, but the arbiter could still steal held bonds. A 25-sat funded acceptance completed once: 23 sats were minted after fees, two 10-sat bonds completed and settled, and 20 sats returned. That is useful historical protocol evidence. It is not a non-custodial primitive, so the funded runner has been removed from the public demo.
 
 The underlying protocol modules and tests remain so LNURLcash developers can audit the result and design a mint-enforced replacement. They are not imported into the public application's value path.
 
@@ -45,7 +45,7 @@ The calculator currently proposes:
 - 5–29 minutes: lower of evidenced direct loss and 25% of the agreed price;
 - under 5 minutes or no-show: lower of evidenced direct loss and 50% of the agreed price.
 
-Protected reasons are safety, emergency, force majeure and mutual agreement. This is a design hypothesis awaiting legal review, not a production tariff.
+Protected reasons are safety, emergency, force majeure and mutual agreement. This is an example protocol policy, not a Moneyer contract term, finding of liability or production tariff. An operator may adopt, change or reject it after assessing its own deployment.
 
 ## Develop and verify
 

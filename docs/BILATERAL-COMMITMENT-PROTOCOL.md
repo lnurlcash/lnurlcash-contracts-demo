@@ -1,6 +1,6 @@
 # Bilateral commitment protocol
 
-> **Retired from the public value path.** This document specifies the archived custodial research protocol. The deployed site stops after offer and acceptance, rejects the packet and value-lifecycle message types, and cannot fund or settle a bond. Do not use this protocol for a new real-money pilot.
+> **Retired from the public value path.** This document specifies the archived custodial research protocol. The deployed site stops after offer and acceptance, rejects the packet and value-lifecycle message types, and cannot fund or settle a bond. Do not use this version unmodified for a production service: its arbiter can spend the held inputs.
 
 ## Scope
 

@@ -12,8 +12,11 @@ describe('public product boundary', () => {
       fundingEnabled: false,
       settlementEnabled: false,
       operatorCanMoveFunds: false,
-      commercialPilot: 'blocked-pending-uk-perimeter-opinion'
+      publisherRole: 'protocol-and-demo-source',
+      serviceOperated: false,
+      implementationReview: 'deployment-specific'
     })
+    expect(PUBLIC_BOND_MODE).not.toHaveProperty('commercialPilot')
   })
 
   it.each(['enrolment', 'contract_offer', 'acceptance'])('accepts evidence-only message type %s', type => {

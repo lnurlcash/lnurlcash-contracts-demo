@@ -19,11 +19,11 @@ The public files verified byte-for-byte after deployment:
 d3ffb1226a6e182c4f68440d6e845000b6ebd3f48c33418471399c0e4bcd115b  assets/index-q3YT0H6l.js
 ```
 
-This release retires the public `bilateral-arbiter-v2` custody and settlement path. It passed 94 tests and the Node 24 production build. The public bundle now accepts only signed enrolment, offer and acceptance evidence; it contains no bond-funding, outcome-decision or settlement controls. Historical packet import is refused, and the UK commercial ride-bond pilot is visibly blocked pending written specialist advice and a genuinely non-custodial settlement primitive.
+This release retires the public `bilateral-arbiter-v2` custody and settlement path. It passed 94 tests and the Node 24 production build. The public bundle now accepts only signed enrolment, offer and acceptance evidence; it contains no bond-funding, outcome-decision or settlement controls. Historical packet import is refused. The page identifies Moneyer as the publisher of protocol research and static demo source, not the operator of a ride, payment or escrow service, and assigns deployment-specific terms and legal assessment to whoever operates an implementation.
 
 The repository-owned browser gate passed locally and against the public HTTPS origin with live pinned mint discovery. Three isolated profiles produced two enrolments and two independent acceptances; the page exposed zero bond-funding and zero settlement controls; a historical custodial packet was visibly refused; the cancellation calculator rendered both the evidenced-loss cap and a zero safety outcome; and a direct recipient-owned request remained available. The hostile-mint matrix refused callback and signing-key substitution, spent-note replay, malformed and oversized bodies and a provably unsendable callback; it recovered an applied mutation with a lost response and made zero automatic mutation retries. Both public browser runs reported zero console errors and `realSatsMoved: false`.
 
-The earlier 25-sat funded run remains useful historical protocol evidence: 23 sats were minted, two 10-sat bonds completed and settled, and 20 sats returned. Its runner has been removed from the public release. That run does not establish lawful escrow, non-custodial operation, a cancellation entitlement or physical-world truth.
+The earlier 25-sat funded run remains useful historical protocol evidence: 23 sats were minted, two 10-sat bonds completed and settled, and 20 sats returned. Its runner has been removed from the public release. That run does not establish non-custodial operation, a cancellation entitlement, physical-world truth or the legal position of any future operator.
 
 ## Static release layout
 

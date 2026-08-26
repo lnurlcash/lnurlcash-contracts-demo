@@ -39,6 +39,8 @@ try {
   ]
   for (const {page} of [partyA, partyB, coordinator]) {
     if (!await page.getByText('New arbiter-held bonds are disabled.').count()) throw new Error('The public custody boundary is not visible.')
+    if (!await page.getByText('Protocol demo, not an escrow service.').count()) throw new Error('The publisher/implementer boundary is not visible.')
+    if ((await page.locator('body').textContent())?.includes('UK commercial pilot blocked')) throw new Error('The retired blanket UK block is still visible.')
     for (const selector of forbiddenSelectors) {
       if (await page.locator(selector).count()) throw new Error(`Forbidden custody control is present: ${selector}`)
     }

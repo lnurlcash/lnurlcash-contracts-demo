@@ -3,7 +3,9 @@ export const PUBLIC_BOND_MODE = Object.freeze({
   fundingEnabled: false,
   settlementEnabled: false,
   operatorCanMoveFunds: false,
-  commercialPilot: 'blocked-pending-uk-perimeter-opinion'
+  publisherRole: 'protocol-and-demo-source',
+  serviceOperated: false,
+  implementationReview: 'deployment-specific'
 } as const)
 
 export const PUBLIC_COORDINATION_MESSAGE_TYPES = Object.freeze([
