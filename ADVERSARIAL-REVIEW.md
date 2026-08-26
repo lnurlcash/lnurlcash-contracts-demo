@@ -1,6 +1,6 @@
 # Adversarial review
 
-Reviewed against the hardened v2 source and three independent browser profiles on 25 August 2026.
+Reviewed against the hardened v2 source, three independent browser profiles and the stateful hostile-mint gates on 26 August 2026.
 
 ## Verdict
 
@@ -11,11 +11,11 @@ The lab now demonstrates a generic, remotely coordinated bilateral commitment pr
 | Sender cannot reclaim a successfully rotated recipient output | implemented; unit and hostile-path tested |
 | Transport cannot silently change signed fields, tags or roles | implemented; strict decoding and tamper tests |
 | Party keys, acceptance and outcomes are independent of the arbiter | implemented; three clean browser profiles pass |
-| A named participant acknowledged its exact bond request | implemented as a signed message; real-sat lifecycle acceptance remains |
-| Activation needs both payer authority and both mint outputs | implemented and negatively tested |
+| A named participant acknowledged its exact bond request | implemented and exercised through two simulated exact-value bond inputs; real-sat lifecycle acceptance remains |
+| Activation needs both payer authority and both mint outputs | implemented, negatively tested and exercised through a stateful mock mint |
 | The arbiter cannot substitute settlement destinations | implemented in the honest client; four distinct per-input targets are countersigned before funding |
 | The arbiter never learns beneficiary payout secrets | implemented and proved across separate browser storage; real-sat settlement remains |
-| An ambiguous payout can resume without changing its target | implemented through beneficiary probe and signed payout acknowledgement |
+| An ambiguous payout can resume without changing its target | implemented and exercised through the real UI after the mock mint applied the first leg but lost its response |
 | A malicious arbiter cannot steal held bonds | false by design; the arbiter knows both held secrets |
 | A malicious mint cannot steal, censor or become insolvent | false for every custodial bearer mint |
 | The protocol objectively identifies a no-show | false; silence and GPS are not trustworthy oracles |
@@ -76,7 +76,11 @@ If an arbiter loses the mutation response, the beneficiary may find the output a
 
 ### A7. Transport metadata and delivery
 
-The three-profile test proves copy/paste and fragment hand-off. It does not prove NIP-59 delivery, ordering, retries or authenticated messenger UX. Fragments stay out of HTTP requests but remain visible to endpoints, history and extensions.
+The application import path now exercises every portable message type under duplicate, dropped, delayed and reordered delivery. The three-profile browser ceremony proves copy/paste and fragment hand-off, including a decision arriving before its dispute and succeeding only after that prerequisite arrives. This proves fail-closed application semantics, not NIP-59 relay behaviour or authenticated messenger UX. Fragments stay out of HTTP requests but remain visible to endpoints, history and extensions.
+
+### A7b. Hostile mint responses
+
+The browser-level hostile mint gate covers callback and signing-key substitution, spent-note replay, malformed and oversized bodies, a callback provably refused before transmission, an applied mutation with a lost response, beneficiary recovery and the absence of automatic mutation retries. A separate stateful mock lifecycle funds both simulated bonds, verifies both outputs, settles matching completion authority, reconciles an ambiguous first leg and resumes the second. These are simulated liabilities, not real-sat settlement evidence.
 
 ### A8. Independent build provenance
 
@@ -103,13 +107,16 @@ The client now fails closed when it sees conflicting signed offers, acceptances,
 
 This improves griefing resistance and auditability. It does not manufacture an objective service oracle or remove custody.
 
-## Remaining gates before a public real-sat bond claim
+## Remaining gate before claiming a funded real-sat bond demonstration
 
 1. Run normal completion, both self-cancellations, mutual cancellation, setup timeout, contract timeout, dispute decision and ambiguous first/second-leg recovery with real disposable notes across three browser profiles.
-2. Exercise every portable message through the intended NIP-59 or application transport, including duplicate, delayed, reordered and dropped delivery.
-3. Run a browser-level hostile mock mint covering callback substitution, key substitution, replay, malformed and oversized bodies, definite refusal, dropped mutation responses and non-idempotent retry behaviour.
-4. Move note spending and participant signing behind a wallet API so the page never receives long-lived keys or arbitrary bearer notes.
-5. Have an independent developer rebuild the published source commit and compare all four asset hashes; add signed provenance before treating deployment identity as independently attested.
-6. Replace single-arbiter custody with mint-enforced conditions or a documented threshold custodian before raising the cap or making a trustless claim.
 
-Until those gates pass, retain the 500-sat cap and the explicit `arbiter custody` label.
+## Remaining production gates
+
+1. Exercise NIP-59 or the embedding application's actual transport over public relays and real devices before claiming that transport integration, including reconnect and relay split-view behaviour.
+2. Move note spending and participant signing behind a wallet API so the page never receives long-lived keys or arbitrary bearer notes.
+3. Have an independent developer rebuild the published source commit and compare all four asset hashes; add signed provenance before treating deployment identity as independently attested.
+4. Add an authenticated append-only transcript or gossip path so isolated participants discover split-view equivocation.
+5. Replace single-arbiter custody with mint-enforced conditions or a documented threshold custodian before raising the cap or making a trustless claim.
+
+Until those gates pass, retain the 500-sat cap and the explicit `arbiter custody` label. The browser and mock-mint gates must never be described as real-sat settlement.

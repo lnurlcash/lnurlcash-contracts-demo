@@ -79,6 +79,10 @@ try {
     await page.locator('[data-status]').filter({hasText: expectedStatus}).waitFor()
   }
   await importPayload(arbiter.page, acceptanceA)
+  // Delivery is at-least-once in many messengers. Re-importing the same
+  // signed event must be idempotent rather than manufacturing new state.
+  await importPayload(arbiter.page, acceptanceA)
+  if (await arbiter.page.locator('[data-create-packet]').count()) throw new Error('A duplicated Party A acceptance substituted for the dropped Party B acceptance.')
   await importPayload(arbiter.page, acceptanceB)
   await arbiter.page.locator('[data-create-packet]').click()
   const packet = await arbiter.page.locator('[data-share-kind="packet"]').getAttribute('data-share')
@@ -114,8 +118,10 @@ try {
   await partyA.page.reload({waitUntil: 'networkidle'})
 
   await partyA.page.locator('[data-sign-outcome="complete"][data-sign-role="party_a"]').click()
+  await partyA.page.locator('[data-status]').filter({hasText: 'signed complete'}).waitFor()
   const outcomeA = await partyA.page.locator('.message-list [data-share-kind="message"]').last().getAttribute('data-share')
   await partyB.page.locator('[data-sign-outcome="complete"][data-sign-role="party_b"]').click()
+  await partyB.page.locator('[data-status]').filter({hasText: 'signed complete'}).waitFor()
   const outcomeB = await partyB.page.locator('.message-list [data-share-kind="message"]').last().getAttribute('data-share')
   if (!outcomeA?.startsWith('cashmsg1') || !outcomeB?.startsWith('cashmsg1')) throw new Error('Portable completion outcomes are missing.')
   await importPayload(arbiter.page, outcomeA)
@@ -124,12 +130,32 @@ try {
   if (await arbiter.page.locator('[data-settle-contract]').count()) throw new Error('Settlement became available without both held outputs and funding acknowledgements.')
 
   await partyA.page.locator('[data-sign-outcome="dispute"][data-sign-role="party_a"]').click()
+  await partyA.page.locator('[data-status]').filter({hasText: 'signed dispute'}).waitFor()
   const dispute = await partyA.page.locator('.message-list [data-share-kind="message"]').last().getAttribute('data-share')
   if (!dispute?.startsWith('cashmsg1')) throw new Error('Portable dispute is missing.')
   await importPayload(arbiter.page, dispute)
   const authorityState = await arbiter.page.locator('.state-list').textContent()
   if (!authorityState?.includes('A participant raised a dispute.')) throw new Error(`A signed dispute did not override matching completion before settlement: ${authorityState}`)
   if (await arbiter.page.locator('[data-create-decision]').count() !== 1) throw new Error('The arbiter decision form did not appear for the signed dispute.')
+  const decisionForm = arbiter.page.locator('[data-create-decision]')
+  await decisionForm.locator('textarea[name="evidence"]').fill('Browser delivery-order acceptance evidence')
+  await decisionForm.locator('button').click()
+  await arbiter.page.locator('[data-status]').filter({hasText: 'Decision signed.'}).waitFor()
+  const decision = await arbiter.page.locator('[data-share-kind="message"]').last().getAttribute('data-share')
+  if (!decision?.startsWith('cashmsg1')) throw new Error('The portable arbiter decision is missing.')
+
+  // A dependent message arriving before its prerequisite must not mutate the
+  // inbox. Once the delayed dispute arrives, the exact same decision imports;
+  // another delivery of it remains idempotent.
+  await importPayload(partyB.page, decision, 'cannot be imported before a signed dispute')
+  await importPayload(partyB.page, dispute)
+  await importPayload(partyB.page, decision)
+  await importPayload(partyB.page, decision)
+  const partyBDecisionCount = await partyB.page.evaluate(key => {
+    const state = JSON.parse(localStorage.getItem(key))
+    return Object.values(state.contracts)[0].decisions.length
+  }, storeKey)
+  if (partyBDecisionCount !== 1) throw new Error('Duplicate arbiter decision delivery was not idempotent.')
 
   const stateOf = page => page.evaluate(key => JSON.parse(localStorage.getItem(key)), storeKey)
   const stateA = await stateOf(partyA.page)
@@ -164,8 +190,12 @@ try {
     uniquePayoutTargets: 4,
     packetComponentsReverified: true,
     packetFragmentStayedClientSide: true,
+    duplicateDeliveryIdempotent: true,
+    droppedPrerequisiteFailedClosed: true,
+    reorderedDeliveryRecovered: true,
     localPayoutContinuityRefused: true,
     portableOutcomeSignatures: 3,
+    portableArbiterDecision: true,
     disputeOverrodeCompletion: true,
     activationFailedClosedWithoutMoney: true,
     arbiterPayoutSecrets: 0,

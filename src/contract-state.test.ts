@@ -10,7 +10,9 @@ import {
   signAcceptance,
   signArbiterDecision,
   signContractOffer,
+  signFundingAcknowledgement,
   signOutcomeStatement,
+  signPayoutAcknowledgement,
   signSettlementNotice
 } from './coordination'
 import {coordinationFixture} from './coordination.fixture'
@@ -29,6 +31,58 @@ const emptyStore = (): DemoStore => ({
 })
 
 describe('fail-closed contract state', () => {
+  it('is idempotent and fail-closed under duplicate, dropped and reordered delivery of every portable message type', () => {
+    const {packet, offer, acceptances, partyA, partyB, arbiter} = coordinationFixture()
+    const store = emptyStore()
+    const fundingA = signFundingAcknowledgement(packet, 'party_a', partyA.secretHex)
+    const fundingB = signFundingAcknowledgement(packet, 'party_b', partyB.secretHex)
+    const completeA = signOutcomeStatement(packet, 'complete', partyA.secretHex)
+    const completeB = signOutcomeStatement(packet, 'complete', partyB.secretHex)
+    const dispute = signOutcomeStatement(packet, 'dispute', partyA.secretHex)
+    const decision = signArbiterDecision(packet, 'refund_both', outputHashOf(randomSecretHex()), 'other', arbiter.secretHex)
+    const noticeA = signSettlementNotice(packet, {
+      sourceRole: 'party_a', beneficiary: 'party_a', outputHash: acceptances.party_a.payoutHashes.party_a,
+      amountMsat: Number(packet.bondRequests.party_a.intent.amount) * 1000, mutationOutcome: 'confirmed'
+    }, arbiter.secretHex)
+    const noticeB = signSettlementNotice(packet, {
+      sourceRole: 'party_b', beneficiary: 'party_b', outputHash: acceptances.party_b.payoutHashes.party_b,
+      amountMsat: Number(packet.bondRequests.party_b.intent.amount) * 1000, mutationOutcome: 'confirmed'
+    }, arbiter.secretHex)
+    const payoutA = signPayoutAcknowledgement(noticeA, packet, partyA.secretHex)
+    const payoutB = signPayoutAcknowledgement(noticeB, packet, partyB.secretHex)
+
+    expect(() => importVerifiedContractMessage(store, acceptances.party_a)).toThrow('referenced contract offer')
+    expect(Object.keys(store.contracts)).toHaveLength(0)
+    importVerifiedContractMessage(store, offer)
+    importVerifiedContractMessage(store, offer)
+    importVerifiedContractMessage(store, acceptances.party_a)
+    importVerifiedContractMessage(store, acceptances.party_a)
+    expect(store.contracts[offer.event.id]!.acceptances).toEqual({party_a: acceptances.party_a.encoded})
+    expect(() => importVerifiedContractMessage(store, fundingB)).toThrow('full contract packet')
+
+    importVerifiedContractPacket(store, packet)
+    importVerifiedContractPacket(store, packet)
+    for (const message of [fundingB, fundingB, fundingA, completeB, completeB, completeA]) {
+      importVerifiedContractMessage(store, message)
+    }
+    expect(() => importVerifiedContractMessage(store, decision)).toThrow('before a signed dispute')
+    importVerifiedContractMessage(store, dispute)
+    importVerifiedContractMessage(store, dispute)
+    importVerifiedContractMessage(store, decision)
+    importVerifiedContractMessage(store, decision)
+    expect(() => importVerifiedContractMessage(store, payoutB)).toThrow('settlement notice')
+    for (const message of [noticeB, noticeB, noticeA, payoutB, payoutB, payoutA, payoutA]) {
+      importVerifiedContractMessage(store, message)
+    }
+
+    const record = store.contracts[offer.event.id]!
+    expect(Object.keys(record.fundingAcks)).toHaveLength(2)
+    expect(record.outcomes).toHaveLength(3)
+    expect(record.decisions).toHaveLength(1)
+    expect(record.settlementNotices).toHaveLength(2)
+    expect(record.payoutAcks).toHaveLength(2)
+  })
+
   it('refuses two signed offers that reuse one contract id with different terms', () => {
     const {offer, arbiter} = coordinationFixture()
     const store = emptyStore()

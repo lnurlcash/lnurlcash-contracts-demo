@@ -15,7 +15,9 @@ The protocol is transport-agnostic. The static site has no account system, match
 9. The arbiter imports rather than synthesises those statements. A disputed decision is signed separately and challenge-delayed.
 10. Settlement notices return to beneficiaries. Each beneficiary probes a secret that never left its browser and signs a payout acknowledgement.
 
-The automated browser ceremony asserts that the Party A profile contains only its Party A identity, Party B contains only Party B, and the arbiter contains only the arbiter identity. It also asserts that the four payout targets are distinct, the arbiter store contains no beneficiary payout secrets, a locally corrupted payout secret blocks packet import, and an imported dispute freezes an otherwise executable pair of completion statements.
+The automated browser ceremony asserts that the Party A profile contains only its Party A identity, Party B contains only Party B, and the arbiter contains only the arbiter identity. It also asserts that the four payout targets are distinct, the arbiter store contains no beneficiary payout secrets, a locally corrupted payout secret blocks packet import, and an imported dispute freezes an otherwise executable pair of completion statements. Duplicate delivery is idempotent, a missing prerequisite cannot be replaced by another role's message, and a reordered arbiter decision is refused until its signed dispute arrives.
+
+A second three-profile browser run uses a stateful mock mint to carry every portable stage through the real UI: both simulated bonds, funding acknowledgements, independent arbiter probes, matching completion statements, settlement notices and beneficiary payout acknowledgements. The mock applies the first settlement leg and loses its response; the beneficiary finds the signed target, acknowledges it, and only then can the arbiter resume the second leg. A separate hostile matrix covers substitution, replay, malformed and oversized responses, provable no-send refusal and non-idempotent retry hazards.
 
 The real-sat funding and settlement lifecycle still needs disposable-note acceptance across those same profiles. Protocol ceremony evidence is not settlement evidence.
 
@@ -32,7 +34,7 @@ The fragment remains visible to:
 
 Contract messages contain public keys, amounts, labels, mint identity, hashes and signatures. They must never contain a bearer note, `k1`, participant private key or payout secret.
 
-Large full packets may exceed limits in some messengers. Copying the raw `cashpacket1` value or carrying it inside NIP-59 avoids depending on URL length, but the NIP-59 transport path is not implemented or field-tested in this repo yet.
+Large full packets may exceed limits in some messengers. Copying the raw `cashpacket1` value or carrying it inside NIP-59 avoids depending on URL length. Every portable message type is now tested through the application's untrusted import boundary under duplicate, dropped, delayed and reordered delivery. NIP-59 relay publication, subscription, reconnect and field behaviour are still not implemented or claimed in this repo.
 
 ## Authentication boundary
 

@@ -35,7 +35,7 @@ The exact role mapping, supported templates and cases this policy deliberately d
 
 Fragment links carry signed contract data but no bearer note or payout secret. A fragment is not sent to this static server, although it remains visible to the recipient, messenger, browser history, extensions and screenshots. Never put an LNURLcash `k1` in a hand-off link.
 
-The remote protocol is transport-agnostic. Copy and paste works now. NIP-59, Signal or another authenticated channel may carry the same bytes, but this repo does not claim transport-level delivery evidence yet.
+The remote protocol is transport-agnostic. Copy and paste works now. The application import path is tested with duplicate, dropped, delayed and reordered messages across every portable message type. NIP-59, Signal or another authenticated channel may carry the same bytes, but this repo does not yet claim a field-tested NIP-59 relay integration.
 
 ## Run it
 
@@ -46,7 +46,7 @@ npm run dev
 npm run acceptance:browser
 ```
 
-The browser acceptance expects Chrome and defaults to `http://127.0.0.1:4181`. Set `DEMO_ORIGIN=https://labs.moneyer.dev LIVE_MINT=1` to exercise the deployed site and live pinned mint discovery without moving sats.
+The browser acceptance expects Chrome and defaults to `http://127.0.0.1:4181`. It runs the separate-profile ceremony, a hostile-mint matrix and a complete stateful mock lifecycle with ambiguous-settlement recovery. Set `DEMO_ORIGIN=https://labs.moneyer.dev LIVE_MINT=1` to exercise the deployed site and live pinned mint discovery without moving sats. The mock lifecycle deliberately moves no real sats and reports that fact.
 
 For a real transfer, create an exact-value disposable note in Notecase or another compatible LUD-25 wallet. Do not use meaningful balances.
 
