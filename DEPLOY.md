@@ -4,11 +4,11 @@
 
 - `labs.moneyer.dev` has an A record for `2.29.14.244`.
 - `https://labs.moneyer.dev` is live; plain HTTP redirects to HTTPS.
-- Release commit: `da725a46c12c`.
-- Static release: `/opt/moneyer-labs/releases/20260825T183513Z-da725a46c12c`.
+- Release commit: `57dfa3e18759`.
+- Static release: `/opt/moneyer-labs/releases/20260826T075341Z-57dfa3e18759`.
 - Live symlink: `/opt/moneyer-labs/current`.
 - Caddy configuration unchanged at this release; the live `labs.moneyer.dev` vhost is byte-identical to `deploy/labs.moneyer.dev.Caddyfile`, so no reload was performed.
-- Immediate static rollback: `/opt/moneyer-labs/releases/20260824T095834Z-586b16adb377`.
+- Immediate static rollback: `/opt/moneyer-labs/releases/20260825T183513Z-da725a46c12c`.
 
 The public files verified byte-for-byte after deployment:
 
@@ -19,9 +19,11 @@ The public files verified byte-for-byte after deployment:
 5f1ef8b8d189d42d33d9b1ed99d8fa0b5e8ed89e6d9eacf7b3ed93f1bcc6a829  assets/index-CBHWtSp6.js
 ```
 
-This release carries `bilateral-arbiter-v2`. It passed a clean Node 24 `npm ci`, 75 tests, the production build and dependency audit with no advisories. After the atomic switch, all four asset hashes were confirmed byte-for-byte through public DNS and directly against the origin, the superseded bundle returned 404, and the certificate and security headers were re-checked.
+This release carries `bilateral-arbiter-v2`. It passed a clean Node 24 `npm ci`, 76 tests, the production build and dependency audit with no advisories. The application bundle is intentionally byte-identical to the prior release because this change adds reproducible acceptance rather than new client behaviour. After the atomic switch, all four asset hashes were confirmed byte-for-byte through public DNS and directly against the origin, and the certificate and security headers were re-checked.
 
-The repository-owned hostile browser ceremony then passed against the public HTTPS origin and live pinned mint discovery: three isolated profiles, neutral delivery labels, two enrolments, two independent acceptances, four unique payout targets, full packet revalidation, no fragment leakage, local payout-secret continuity refusal, three portable outcome signatures, dispute precedence, activation refusing to move without money, no beneficiary secrets in arbiter storage, tamper refusal and zero console errors. The ceremony moved no sats. The disposable-note funding and settlement matrix remains an explicit gate in `ADVERSARIAL-REVIEW.md`.
+The repository-owned browser gate then passed both locally and against the public HTTPS origin. Its separate-profile ceremony used live pinned mint discovery and added duplicate-delivery idempotence, a missing-prerequisite refusal, reordered decision recovery and a portable arbiter decision to the earlier packet, continuity, dispute, tamper and secret-isolation checks. The hostile-mint matrix refused callback and signing-key substitution, spent-note replay, malformed and oversized bodies and a provably unsendable callback; it recovered an applied mutation with a lost response and made zero automatic mutation retries. Finally, a stateful mock lifecycle carried two exact simulated bonds through acknowledgements, arbiter probes, bilateral completion, an ambiguous first settlement leg, beneficiary acknowledgement, reconciliation and the resumed second leg across three profiles. Every browser run reported zero console errors.
+
+No real sats moved. The stateful mint reports `realSatsMoved: false`, and the disposable-note lifecycle matrix remains the single gate before claiming a funded real-sat bond demonstration in `ADVERSARIAL-REVIEW.md`.
 
 ## Static release layout
 
