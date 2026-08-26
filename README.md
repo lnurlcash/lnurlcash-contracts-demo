@@ -48,6 +48,8 @@ npm run acceptance:browser
 
 The browser acceptance expects Chrome and defaults to `http://127.0.0.1:4181`. It runs the separate-profile ceremony, a hostile-mint matrix and a complete stateful mock lifecycle with ambiguous-settlement recovery. Set `DEMO_ORIGIN=https://labs.moneyer.dev LIVE_MINT=1` to exercise the deployed site and live pinned mint discovery without moving sats. The mock lifecycle deliberately moves no real sats and reports that fact.
 
+One capped real-sat normal-completion run has also passed against the public site: two independent persistent party profiles committed 10 sats each, the arbiter profile verified both held outputs, both parties signed completion, both settlement legs confirmed, both beneficiaries acknowledged their private outputs and the full 20 sats returned to an encrypted Notecase wallet. The guarded runner is `npm run acceptance:browser:real-sats`; it requires a fresh isolated Notecase home, the sibling Notecase build, `REAL_SATS=25_SAT_ACCEPTANCE` and an explicit wallet PIN. If a funded run stops, preserve all three profiles and use `REAL_SATS_RECOVERY=FUNDED_PROFILE` to continue the same contract. Never start again with different notes.
+
 For a real transfer, create an exact-value disposable note in Notecase or another compatible LUD-25 wallet. Do not use meaningful balances.
 
 ## Security boundaries

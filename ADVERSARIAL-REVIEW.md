@@ -11,10 +11,10 @@ The lab now demonstrates a generic, remotely coordinated bilateral commitment pr
 | Sender cannot reclaim a successfully rotated recipient output | implemented; unit and hostile-path tested |
 | Transport cannot silently change signed fields, tags or roles | implemented; strict decoding and tamper tests |
 | Party keys, acceptance and outcomes are independent of the arbiter | implemented; three clean browser profiles pass |
-| A named participant acknowledged its exact bond request | implemented and exercised through two simulated exact-value bond inputs; real-sat lifecycle acceptance remains |
-| Activation needs both payer authority and both mint outputs | implemented, negatively tested and exercised through a stateful mock mint |
+| A named participant acknowledged its exact bond request | implemented and exercised by two independent profiles with two real 10-sat bond inputs |
+| Activation needs both payer authority and both mint outputs | implemented, negatively tested and exercised through both the stateful mock and two live mint outputs |
 | The arbiter cannot substitute settlement destinations | implemented in the honest client; four distinct per-input targets are countersigned before funding |
-| The arbiter never learns beneficiary payout secrets | implemented and proved across separate browser storage; real-sat settlement remains |
+| The arbiter never learns beneficiary payout secrets | implemented and proved across separate browser storage, including two confirmed real-sat settlement legs and beneficiary acknowledgements |
 | An ambiguous payout can resume without changing its target | implemented and exercised through the real UI after the mock mint applied the first leg but lost its response |
 | A malicious arbiter cannot steal held bonds | false by design; the arbiter knows both held secrets |
 | A malicious mint cannot steal, censor or become insolvent | false for every custodial bearer mint |
@@ -80,7 +80,7 @@ The application import path now exercises every portable message type under dupl
 
 ### A7b. Hostile mint responses
 
-The browser-level hostile mint gate covers callback and signing-key substitution, spent-note replay, malformed and oversized bodies, a callback provably refused before transmission, an applied mutation with a lost response, beneficiary recovery and the absence of automatic mutation retries. A separate stateful mock lifecycle funds both simulated bonds, verifies both outputs, settles matching completion authority, reconciles an ambiguous first leg and resumes the second. These are simulated liabilities, not real-sat settlement evidence.
+The browser-level hostile mint gate covers callback and signing-key substitution, spent-note replay, malformed and oversized bodies, a callback provably refused before transmission, an applied mutation with a lost response, beneficiary recovery and the absence of automatic mutation retries. A separate stateful mock lifecycle funds both simulated bonds, verifies both outputs, settles matching completion authority, reconciles an ambiguous first leg and resumes the second. Those hostile and ambiguous cases remain simulated liabilities. Separately, one live normal-completion lifecycle has passed with two real 10-sat bonds; that does not turn the simulated outcome matrix into real-sat evidence.
 
 ### A8. Independent build provenance
 
@@ -107,9 +107,9 @@ The client now fails closed when it sees conflicting signed offers, acceptances,
 
 This improves griefing resistance and auditability. It does not manufacture an objective service oracle or remove custody.
 
-## Remaining gate before claiming a funded real-sat bond demonstration
+## Remaining real-sat outcome gates
 
-1. Run normal completion, both self-cancellations, mutual cancellation, setup timeout, contract timeout, dispute decision and ambiguous first/second-leg recovery with real disposable notes across three browser profiles.
+Normal completion has passed with two real 10-sat disposable bonds across three persistent browser profiles. Before claiming the whole outcome matrix with real sats, separately run both self-cancellations, mutual cancellation, setup timeout, contract timeout, dispute decision and ambiguous first/second-leg recovery with fresh disposable notes.
 
 ## Remaining production gates
 
@@ -119,4 +119,4 @@ This improves griefing resistance and auditability. It does not manufacture an o
 4. Add an authenticated append-only transcript or gossip path so isolated participants discover split-view equivocation.
 5. Replace single-arbiter custody with mint-enforced conditions or a documented threshold custodian before raising the cap or making a trustless claim.
 
-Until those gates pass, retain the 500-sat cap and the explicit `arbiter custody` label. The browser and mock-mint gates must never be described as real-sat settlement.
+Until those gates pass, retain the 500-sat cap and the explicit `arbiter custody` label. Only the normal-completion lifecycle may currently be described as real-sat settlement; the hostile and remaining outcome gates must not.
