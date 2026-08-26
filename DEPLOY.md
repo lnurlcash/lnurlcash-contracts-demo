@@ -4,11 +4,11 @@
 
 - `labs.moneyer.dev` has an A record for `2.29.14.244`.
 - `https://labs.moneyer.dev` is live; plain HTTP redirects to HTTPS.
-- Release commit: `57dfa3e18759`.
-- Static release: `/opt/moneyer-labs/releases/20260826T075341Z-57dfa3e18759`.
+- Release commit: `09e842f6818a`.
+- Static release: `/opt/moneyer-labs/releases/20260826T085016Z-09e842f6818a`.
 - Live symlink: `/opt/moneyer-labs/current`.
 - Caddy configuration unchanged at this release; the live `labs.moneyer.dev` vhost is byte-identical to `deploy/labs.moneyer.dev.Caddyfile`, so no reload was performed.
-- Immediate static rollback: `/opt/moneyer-labs/releases/20260825T183513Z-da725a46c12c`.
+- Immediate static rollback: `/opt/moneyer-labs/releases/20260826T075341Z-57dfa3e18759`.
 
 The public files verified byte-for-byte after deployment:
 
