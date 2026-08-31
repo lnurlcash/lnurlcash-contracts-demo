@@ -110,7 +110,8 @@ rules an output was created under.
 
 ## What exists today
 
-From `lnurlcash-kit@0.2.1`, cross-checked against the LUD-25 draft:
+From `lnurlcash-kit@0.5.0`, cross-checked against the current LUD-25 draft
+profile used by the ForgeSworn conformance suite:
 
 | Concern | Current shape |
 | --- | --- |
@@ -118,12 +119,16 @@ From `lnurlcash-kit@0.2.1`, cross-checked against the LUD-25 draft:
 | Hash-locked mutation | GET the callback with `k1`, `h`, `amount` |
 | Available mutations | `rotateNoteWithHash`, `splitNoteWithHash` (two outputs, with change), `mergeNotesWithHash` |
 | Mint identity | `mintPubkey` in the mint address document, signature over `(k1, amountMsat)` |
-| Capability advertisement | `mintToHash` boolean in the mint address and pay-request documents |
+| Baseline mint commitment | `commentAllowed >= 64`; every new mint quote carries `comment=hex(sha256(secret))` |
+| Additive capability advertisement | `mintToHash` boolean in the mint address and pay-request documents |
 
 Two of these carry most of the design. There is already a **capability-flag precedent**
-(`mintToHash`, and the receipt negotiation in `docs/BOUND-MINT-RECEIPTS.md`), so conditional
-support needs no new discovery mechanism. And the mutation endpoint already takes an opaque `h` —
-the mint does not care how that hash was derived.
+(`mintToHash`, and the receipt negotiation in the conformance suite's
+`docs/BOUND-MINT-RECEIPTS.md`), so conditional support needs no new discovery mechanism. The
+mandatory `comment` closes the mint-time preimage race; it does **not** add conditional
+redemption. That remains a separate mint-enforced extension because the mint must evaluate the
+spending witness, not merely know how the output hash was chosen. The mutation endpoint already
+takes an opaque `h` — the mint does not care how that hash was derived.
 
 ## Sketch
 
