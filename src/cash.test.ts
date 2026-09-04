@@ -3,6 +3,17 @@ import {hashK1, RequestRefusedError} from 'lnurlcash-kit'
 import {fundReceiverLockedRequest, receiveLockedPayment, receiveRedirectedPayout, redirectHeldNoteToHash} from './cash'
 import {createIdentity, outputHashOf, randomSecretHex, signRequest, type DirectPaymentIntent} from './protocol'
 
+// LUD-25 made offline verification mandatory on 2026-09-02: a SERVICE MUST
+// publish the key its notes verify against on every withdrawRequest, and
+// lnurlcash-kit refuses a response without one. A stand-in mint publishes it
+// too, or it is standing in for a mint no wallet will talk to.
+const MINT_PUBKEY = '02' + 'cd'.repeat(32)
+// LUD-25 also requires a signature over every note a rotate, split or merge
+// mints. Nothing here verifies it - these tests are about which secrets do
+// and do not reach the payer - but a mutation answered without one is a
+// conformance failure the client now refuses, so the stand-in returns one.
+const MUTATION_SIG = 'ab'.repeat(65)
+
 const json = (body: unknown): Response => new Response(JSON.stringify(body), {
   status: 200,
   headers: {'content-type': 'application/json'}
@@ -40,6 +51,7 @@ describe('real-value receiver locking', () => {
         return json({
           tag: 'withdrawRequest',
           callback: 'https://mint.test/w/cb',
+          mintPubkey: MINT_PUBKEY,
           k1,
           minWithdrawable: 21_000,
           maxWithdrawable: 21_000,
@@ -50,7 +62,7 @@ describe('real-value receiver locking', () => {
         expect(url.searchParams.get('k1')).toBe(inputSecret)
         expect(url.searchParams.get('h')).toBe(hashK1(receiverSecret))
         mutationSeen = true
-        return json({status: 'OK'})
+        return json({status: 'OK', sig: MUTATION_SIG})
       }
       throw new Error(`Unexpected URL ${url}`)
     }
@@ -74,6 +86,7 @@ describe('real-value receiver locking', () => {
       return json({
         tag: 'withdrawRequest',
         callback: 'https://mint.test/w/cb',
+        mintPubkey: MINT_PUBKEY,
         k1: inputSecret,
         minWithdrawable: 42_000,
         maxWithdrawable: 42_000,
@@ -94,6 +107,7 @@ describe('real-value receiver locking', () => {
       return json({
         tag: 'withdrawRequest',
         callback: 'https://mint.test/w/cb',
+        mintPubkey: MINT_PUBKEY,
         k1: inputSecret,
         minWithdrawable: 21_000,
         maxWithdrawable: 21_000,
@@ -126,6 +140,7 @@ describe('real-value receiver locking', () => {
       return json({
         tag: 'withdrawRequest',
         callback: 'https://evil.test/cb',
+        mintPubkey: MINT_PUBKEY,
         k1: inputSecret,
         minWithdrawable: 21_000,
         maxWithdrawable: 21_000,
@@ -141,7 +156,7 @@ describe('real-value receiver locking', () => {
     const request = makeRequest('bb'.repeat(32))
     const fetch = async (): Promise<Response> => {
       return json({
-        tag: 'withdrawRequest', callback: 'http://mint.test/w/cb', k1: inputSecret,
+        tag: 'withdrawRequest', callback: 'http://mint.test/w/cb', mintPubkey: MINT_PUBKEY, k1: inputSecret,
         minWithdrawable: 21_000, maxWithdrawable: 21_000, defaultDescription: 'test note'
       })
     }
@@ -164,7 +179,7 @@ describe('real-value receiver locking', () => {
       expect(url.searchParams.get('k1')).toBe(heldSecret)
       expect(url.searchParams.get('h')).toBe(beneficiaryHash)
       expect(String(input)).not.toContain(beneficiarySecret)
-      return json({status: 'OK'})
+      return json({status: 'OK', sig: MUTATION_SIG})
     }
     const receipt = await redirectHeldNoteToHash(held, heldSecret, beneficiaryHash, {fetch})
     expect(receipt).toMatchObject({outputHash: beneficiaryHash, outcome: 'confirmed', amountMsat: 21_000})
@@ -191,7 +206,7 @@ describe('real-value receiver locking', () => {
         const url = new URL(String(input))
         expect(url.searchParams.get('k1')).toBe(beneficiarySecret)
         return json({
-          tag: 'withdrawRequest', callback: 'https://mint.test/w/cb', k1: beneficiarySecret,
+          tag: 'withdrawRequest', callback: 'https://mint.test/w/cb', mintPubkey: MINT_PUBKEY, k1: beneficiarySecret,
           minWithdrawable: 21_000, maxWithdrawable: 21_000, defaultDescription: 'settled'
         })
       }}
