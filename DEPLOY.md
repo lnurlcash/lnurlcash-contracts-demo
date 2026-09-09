@@ -4,19 +4,30 @@
 
 - `labs.moneyer.dev` has an A record for `2.29.14.244`.
 - `https://labs.moneyer.dev` is live; plain HTTP redirects to HTTPS.
-- Release commit: `1fa51a425dea`.
-- Static release: `/opt/moneyer-labs/releases/20260826T104505Z-1fa51a425dea`.
+- Release commit: `64c8542009cb`.
+- Static release: `/opt/moneyer-labs/releases/20260909T190045Z-64c8542009cb`.
 - Live symlink: `/opt/moneyer-labs/current`.
-- Caddy configuration unchanged at this release; the live `labs.moneyer.dev` vhost is byte-identical to `deploy/labs.moneyer.dev.Caddyfile`, so no reload was performed.
-- Immediate static rollback: `/opt/moneyer-labs/releases/20260826T101119Z-5dd787c9bff4`.
+- Caddy configuration DID change at this release and was reloaded, not
+  restarted. The `connect-src` in the `labs.moneyer.dev` vhost moved from
+  `https://mint.forgesworn.dev` to `https://moneyer.dev` and now matches
+  `deploy/labs.moneyer.dev.Caddyfile` again. Validate with
+  `/usr/local/bin/caddy-ratelimit`, never `/usr/bin/caddy`: the plugin build
+  is what a systemd drop-in actually runs, and the packaged binary rejects a
+  valid Caddyfile because it lacks the rate-limit module. The previous
+  Caddyfile is kept on the host as `/etc/caddy/Caddyfile.bak-20260909T190045Z`.
+- Immediate static rollback: `/opt/moneyer-labs/releases/20260831T135202Z-747841d1b112`.
+
+Why this release exists: `mint.forgesworn.dev` sunset on 2026-08-27 and
+refuses to mint, so the lab's only allowlisted mint could no longer issue the
+exact-value note its flow needs. The lab now allowlists `moneyer.dev`.
 
 The public files verified byte-for-byte after deployment:
 
 ```text
-366bc5e36e76483fdaa767f8371470d47515979bba2fe6db6c10d3ff60915083  index.html
+2bc00e5f409402b142c385ff77c8e5597c3daa1803a45f2bfe7a5510c0369f9e  index.html
 2c16fbbcace9e2853d4aa125e24443d77ed8c92fb010e2fb4ea9035ac9ef2dcb  favicon.svg
 605e92b0a23b293e2c542964f0103614542c0c0c67bb61919ea07a593d3867c4  assets/index-CRR9bfEb.css
-5a6b52c16b9e5b2871a52c33107e7046cb875cdc9b48e6d75a3e2f9206905644  assets/index-vuHEJJUk.js
+3f42af7670e867c791060d71ef1ca14383ac8ac8c110635bdc5028ae6e3c89cf  assets/index-DLinxvlF.js
 ```
 
 This release keeps the public `bilateral-arbiter-v2` custody and settlement path retired and corrects the publisher/service framing. It passed 94 tests and the Node 24 production build. The public bundle accepts only signed enrolment, offer and acceptance evidence; it contains no bond-funding, outcome-decision or settlement controls. Historical packet import is refused. The page identifies Moneyer as the publisher of protocol research and static demo source, not the operator of a ride, payment or escrow service, and assigns deployment-specific terms and legal assessment to whoever operates an implementation.
