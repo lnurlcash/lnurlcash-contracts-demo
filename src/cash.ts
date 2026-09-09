@@ -54,6 +54,23 @@ const noteUrlWithSignature = (withdrawLink: string, secretHex: string, amountMsa
   return signature ? withNewK1(basic, secretHex, amountMsat, signature) : basic
 }
 
+// One mutation on the wire, per attempt, always.
+//
+// lnurlcash-kit re-sends a mutation once by default when the answer is lost,
+// and LUD-25 is on its side: a SERVICE MUST replay a retried mutation rather
+// than refuse it, so against a compliant mint the second send is free and the
+// holder gets a definite answer instead of an ambiguous one.
+//
+// This lab opts out anyway, because it is the one place that assumes nothing
+// about the mint. A mint that does not honour the replay rule - which is the
+// mint this lab exists to survive - can read a re-send as a second request,
+// and the payer cannot tell the difference from out here: the output secret
+// is deliberately the recipient's alone, so the payer has no way to probe
+// what landed. The published boundary is that an ambiguous mutation is
+// reported as ambiguous and left for the recipient to resolve, and a silent
+// retry underneath would make that claim false.
+const NO_RETRY = {mutationRetries: 0} as const
+
 export const fundReceiverLockedRequest = async (
   request: SignedRequest,
   noteInput: string,
@@ -83,7 +100,7 @@ export const fundReceiverLockedRequest = async (
     throw new Error(`Use an exact ${request.intent.amount} sat note. The pasted note is worth ${info.maxWithdrawable / 1000} sat.`)
   }
   try {
-    const result = await rotateNoteWithHash(info.callback, k1, request.intent.outputHash, options)
+    const result = await rotateNoteWithHash(info.callback, k1, request.intent.outputHash, {...options, ...NO_RETRY})
     return {
       requestEventId: request.event.id,
       contractId: contractIdOf(request.intent),
@@ -160,7 +177,7 @@ export const redirectHeldNoteToHash = async (
   assertCallbackAtMint(held.callback, heldHost)
   if (!/^[0-9a-f]{64}$/u.test(beneficiaryOutputHash)) throw new Error('The beneficiary output hash is malformed.')
   try {
-    const result = await rotateNoteWithHash(held.callback, receiverSecretHex, beneficiaryOutputHash, options)
+    const result = await rotateNoteWithHash(held.callback, receiverSecretHex, beneficiaryOutputHash, {...options, ...NO_RETRY})
     return {
       amountMsat: held.amountMsat,
       mintHost: heldHost,

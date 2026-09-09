@@ -3,6 +3,7 @@ import {chromium} from 'playwright'
 
 const origin = (process.env.DEMO_ORIGIN ?? 'http://127.0.0.1:4181').replace(/\/$/u, '')
 const mintOrigin = 'https://moneyer.dev'
+const MUTATION_SIG = 'ab'.repeat(65)
 const pin = '0218865ec3352afb85695bd1b6089323f802ecbf3ae2103bf8fd4d3e6fb571f0e4'
 const wrongPin = `02${'11'.repeat(32)}`
 const amountMsat = 21_000
@@ -67,7 +68,12 @@ class HostileMint {
       // corrupted. An unreadable 200 exercises the same ambiguous boundary
       // without treating the expected transport fault as a browser-console bug.
       if (this.mode === 'dropped-mutation') return route.fulfill({status: 200, contentType: 'application/json', body: '{'})
-      return route.fulfill({json: {status: 'OK'}})
+      // LUD-25 requires a signature over every note a mutation mints, and
+      // lnurlcash-kit refuses a mutation answered without one. Nothing here
+      // checks it - these scenarios are about what the client sends and
+      // refuses to send - but a stand-in that omits it is standing in for a
+      // mint no wallet will talk to.
+      return route.fulfill({json: {status: 'OK', sig: MUTATION_SIG}})
     }
     if (url.pathname === '/w') {
       const k1 = url.searchParams.get('k1') ?? ''
