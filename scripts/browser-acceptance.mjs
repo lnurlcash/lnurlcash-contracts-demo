@@ -4,15 +4,15 @@ const origin = (process.env.DEMO_ORIGIN ?? 'http://127.0.0.1:4181').replace(/\/$
 const artifactDirectory = process.env.ARTIFACT_DIR ?? '/tmp'
 const browser = await chromium.launch({channel: 'chrome', headless: true})
 const errors = []
-const pin = '03bcd4846649e7b7d27e044ed7305547a5cf0209bd9629aa1de67f47d0c41b4407'
+const pin = '0218865ec3352afb85695bd1b6089323f802ecbf3ae2103bf8fd4d3e6fb571f0e4'
 const discovery = {
   tag: 'withdrawRequest',
-  callback: 'https://mint.forgesworn.dev/w',
+  callback: 'https://moneyer.dev/w',
   minWithdrawable: 1000,
   maxWithdrawable: 500000,
   defaultDescription: 'Contracts lab test mint',
   mintPubkey: pin,
-  payLink: 'https://mint.forgesworn.dev/p'
+  payLink: 'https://moneyer.dev/.well-known/lnurlp/_'
 }
 
 try {
@@ -22,7 +22,7 @@ try {
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
     page.on('pageerror', error => errors.push(error.message))
     if (process.env.LIVE_MINT !== '1') {
-      await page.route('https://mint.forgesworn.dev/.well-known/lnurlw/_', route => route.fulfill({json: discovery}))
+      await page.route('https://moneyer.dev/.well-known/lnurlw/_', route => route.fulfill({json: discovery}))
     }
     await page.goto(`${origin}/`, {waitUntil: 'networkidle'})
     return {context, page}

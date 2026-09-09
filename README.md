@@ -62,7 +62,7 @@ The browser gate uses three independent profiles, completes the remote signed-ev
 
 ## Security and release boundaries
 
-- Only `https://mint.forgesworn.dev` is allowlisted, with a pinned signing key.
+- Only `https://moneyer.dev` is allowlisted, with a pinned signing key.
 - Direct transfers are capped at 500 sats and require exact-value disposable notes.
 - Fragment links are not sent to the static server, but remain visible to the recipient, browser history, extensions and screenshots.
 - Mutation calls are never retried automatically after an ambiguous response.

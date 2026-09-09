@@ -58,7 +58,7 @@ import {
 import {assertTrustedMint, TRUSTED_MINTS} from './trust'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
-const DEFAULT_DISCOVERY = 'https://mint.forgesworn.dev/.well-known/lnurlw/_'
+const DEFAULT_DISCOVERY = 'https://moneyer.dev/.well-known/lnurlw/_'
 const TEMPLATE_DEFAULTS: Record<ContractTemplate, {title: string; partyA: string; partyB: string; arbiter: string}> = {
   ride: {title: 'Point-to-point ride', partyA: 'Rider', partyB: 'Driver', arbiter: 'Evidence coordinator'},
   delivery: {title: 'Item delivery', partyA: 'Customer', partyB: 'Courier', arbiter: 'Evidence coordinator'},

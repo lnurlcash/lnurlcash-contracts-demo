@@ -2,8 +2,8 @@ import {createHash} from 'node:crypto'
 import {chromium} from 'playwright'
 
 const origin = (process.env.DEMO_ORIGIN ?? 'http://127.0.0.1:4181').replace(/\/$/u, '')
-const mintOrigin = 'https://mint.forgesworn.dev'
-const pin = '03bcd4846649e7b7d27e044ed7305547a5cf0209bd9629aa1de67f47d0c41b4407'
+const mintOrigin = 'https://moneyer.dev'
+const pin = '0218865ec3352afb85695bd1b6089323f802ecbf3ae2103bf8fd4d3e6fb571f0e4'
 const wrongPin = `02${'11'.repeat(32)}`
 const amountMsat = 21_000
 
@@ -37,7 +37,7 @@ class HostileMint {
       callback: this.mode === 'callback-substitution'
         ? 'https://evil.example/steal'
         : this.mode === 'definite-refusal'
-          ? 'http://mint.forgesworn.dev/w/cb'
+          ? 'http://moneyer.dev/w/cb'
           : `${mintOrigin}/w/cb`,
       k1,
       minWithdrawable: value,
@@ -96,7 +96,7 @@ const openScenario = async (mode, index) => {
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(`${mode}: ${message.text()}`) })
   page.on('pageerror', error => consoleErrors.push(`${mode}: ${error.message}`))
   page.on('dialog', dialog => void dialog.accept())
-  await page.route('https://mint.forgesworn.dev/**', route => mint.handle(route))
+  await page.route('https://moneyer.dev/**', route => mint.handle(route))
   await page.route('https://evil.example/**', route => mint.handle(route))
   await page.goto(`${origin}/`, {waitUntil: 'networkidle'})
   return {context, page, mint, note: `${mintOrigin}/w?k1=${inputSecret}&amount=${amountMsat}`}

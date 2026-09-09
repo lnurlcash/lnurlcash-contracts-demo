@@ -6,10 +6,10 @@ export type MintPin = {
 }
 
 export const TRUSTED_MINTS: Readonly<Record<string, MintPin>> = Object.freeze({
-  'mint.forgesworn.dev': Object.freeze({
-    withdrawLink: 'https://mint.forgesworn.dev/w',
+  'moneyer.dev': Object.freeze({
+    withdrawLink: 'https://moneyer.dev/w',
     mintPubkeys: Object.freeze([
-      '03bcd4846649e7b7d27e044ed7305547a5cf0209bd9629aa1de67f47d0c41b4407'
+      '0218865ec3352afb85695bd1b6089323f802ecbf3ae2103bf8fd4d3e6fb571f0e4'
     ])
   })
 })

@@ -23,9 +23,9 @@ import {createIdentity, outputHashOf, randomId, randomSecretHex, signRequest, ty
 import type {DemoStore, StoredRequest} from './store'
 
 const mint = {
-  host: 'mint.forgesworn.dev',
-  withdrawLink: 'https://mint.forgesworn.dev/w',
-  mintPubkey: '03bcd4846649e7b7d27e044ed7305547a5cf0209bd9629aa1de67f47d0c41b4407'
+  host: 'moneyer.dev',
+  withdrawLink: 'https://moneyer.dev/w',
+  mintPubkey: '0218865ec3352afb85695bd1b6089323f802ecbf3ae2103bf8fd4d3e6fb571f0e4'
 }
 
 const emptyStore = (): DemoStore => ({identities: {}, enrolments: {}, requests: {}, contracts: {}, payoutTargets: {}, settlements: [], resolutions: {}})

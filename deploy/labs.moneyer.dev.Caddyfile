@@ -4,7 +4,7 @@ labs.moneyer.dev {
 
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://mint.forgesworn.dev; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://moneyer.dev; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 		Cross-Origin-Opener-Policy "same-origin"
 		Cross-Origin-Resource-Policy "same-origin"
 		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"

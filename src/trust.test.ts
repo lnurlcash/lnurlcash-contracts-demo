@@ -2,9 +2,9 @@ import {describe, expect, it} from 'vitest'
 import {assertTrustedMint} from './trust'
 
 const trusted = () => ({
-  host: 'mint.forgesworn.dev',
-  withdrawLink: 'https://mint.forgesworn.dev/w',
-  mintPubkey: '03bcd4846649e7b7d27e044ed7305547a5cf0209bd9629aa1de67f47d0c41b4407'
+  host: 'moneyer.dev',
+  withdrawLink: 'https://moneyer.dev/w',
+  mintPubkey: '0218865ec3352afb85695bd1b6089323f802ecbf3ae2103bf8fd4d3e6fb571f0e4'
 })
 
 describe('public mint policy', () => {
@@ -17,7 +17,7 @@ describe('public mint policy', () => {
   })
 
   it('refuses endpoint and key substitution on an allowlisted host', () => {
-    expect(() => assertTrustedMint({...trusted(), withdrawLink: 'https://mint.forgesworn.dev/other'})).toThrow('withdraw endpoint')
+    expect(() => assertTrustedMint({...trusted(), withdrawLink: 'https://moneyer.dev/other'})).toThrow('withdraw endpoint')
     expect(() => assertTrustedMint({...trusted(), mintPubkey: `02${'11'.repeat(32)}`})).toThrow('signing key')
   })
 })
