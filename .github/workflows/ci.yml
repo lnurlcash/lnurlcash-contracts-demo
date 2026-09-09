@@ -1,0 +1,44 @@
+name: CI
+
+# This repo publishes a live page rather than a package, so the thing worth
+# guarding is the page: that it still builds, and that the two browser gates
+# in scripts/ still hold. Both had been failing silently for weeks with no CI
+# here to say so - one on a mint that had stopped minting, one on a stand-in
+# mint that answered mutations without the signature the kit now requires.
+
+on:
+  push:
+    branches: [main, dev, 'feat/**', 'fix/**', 'chore/**']
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run check
+
+      # The acceptance scripts drive real Chrome, not the bundled chromium:
+      # `channel: 'chrome'` is deliberate, because the CSP and the browser's
+      # own fetch behaviour are part of what they are checking.
+      - run: npx playwright install --with-deps chrome
+
+      # Served from dist, not the dev server: the meta CSP and the built
+      # bundle are what a visitor gets, and the dev server is neither.
+      - name: serve the built page
+        run: |
+          npx vite preview --host 127.0.0.1 --port 4181 &
+          until curl -sf -o /dev/null http://127.0.0.1:4181/; do sleep 1; done
+
+      - run: npm run acceptance:browser
