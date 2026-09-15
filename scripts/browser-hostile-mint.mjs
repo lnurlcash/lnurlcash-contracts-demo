@@ -32,7 +32,7 @@ class HostileMint {
     }
   }
 
-  noteInfo(k1, value) {
+  noteInfo(value, k1) {
     return {
       tag: 'withdrawRequest',
       callback: this.mode === 'callback-substitution'
@@ -40,7 +40,7 @@ class HostileMint {
         : this.mode === 'definite-refusal'
           ? 'http://moneyer.dev/w/cb'
           : `${mintOrigin}/w/cb`,
-      k1,
+      ...(k1 ? {k1} : {}),
       minWithdrawable: value,
       maxWithdrawable: value,
       defaultDescription: 'Hostile contracts-lab note',
@@ -69,7 +69,7 @@ class HostileMint {
       // without treating the expected transport fault as a browser-console bug.
       if (this.mode === 'dropped-mutation') return route.fulfill({status: 200, contentType: 'application/json', body: '{'})
       // LUD-25 requires a signature over every note a mutation mints, and
-      // lnurlcash-kit refuses a mutation answered without one. Nothing here
+      // @lnurlcash/kit refuses a mutation answered without one. Nothing here
       // checks it - these scenarios are about what the client sends and
       // refuses to send - but a stand-in that omits it is standing in for a
       // mint no wallet will talk to.
@@ -77,15 +77,22 @@ class HostileMint {
     }
     if (url.pathname === '/w') {
       const k1 = url.searchParams.get('k1') ?? ''
-      if (this.mode === 'malformed-body' && k1 === this.inputSecret) {
+      const h = url.searchParams.get('h') ?? ''
+      const isInput = k1 === this.inputSecret || h === hashSecret(this.inputSecret)
+      if (this.mode === 'malformed-body' && isInput) {
         return route.fulfill({status: 200, contentType: 'application/json', body: '{'})
       }
-      if (this.mode === 'oversized-body' && k1 === this.inputSecret) {
+      if (this.mode === 'oversized-body' && isInput) {
         return route.fulfill({status: 200, contentType: 'application/json', body: 'x'.repeat(1_048_577)})
       }
-      const value = this.live.get(k1) ?? this.outputs.get(hashSecret(k1))
+      const liveEntry = h
+        ? [...this.live.entries()].find(([secret]) => hashSecret(secret) === h)
+        : undefined
+      const value = k1
+        ? this.live.get(k1) ?? this.outputs.get(hashSecret(k1))
+        : liveEntry?.[1] ?? this.outputs.get(h)
       if (value === undefined) return route.fulfill({json: {status: 'ERROR', reason: 'spent'}})
-      return route.fulfill({json: this.noteInfo(k1, value)})
+      return route.fulfill({json: this.noteInfo(value, k1 || undefined)})
     }
     return route.abort('blockedbyclient')
   }
@@ -141,7 +148,7 @@ try {
   const malformed = await openScenario('malformed-body', 51)
   await createRequest(malformed.page)
   await fund(malformed.page, malformed.note)
-  await expectStatus(malformed.page, 'unreadable response')
+  await expectStatus(malformed.page, 'invalid response')
   if (malformed.mint.callbackCalls !== 0) throw new Error('A malformed informational body reached a mutation callback.')
   await malformed.context.close()
 
