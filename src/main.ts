@@ -1,4 +1,4 @@
-import {fetchMintAddress, hashK1, noteK1, resolveNoteInput} from 'lnurlcash-kit'
+import {fetchMintAddress, hashK1, noteK1, resolveNoteInput} from '@lnurlcash/kit'
 import {
   fundReceiverLockedRequest,
   receiveLockedPayment,

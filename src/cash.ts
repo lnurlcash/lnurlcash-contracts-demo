@@ -1,15 +1,14 @@
 import {
   buildNoteUrl,
+  AmbiguousMintError,
   fetchNoteInfo,
   hashK1,
   noteK1,
-  RequestRefusedError,
   resolveNoteInput,
   rotateNoteWithHash,
   verifyNoteSignature,
-  withNewK1,
-  type LnurlcashOptions
-} from 'lnurlcash-kit'
+  withNewK1
+} from '@lnurlcash/kit'
 import {contractIdOf, type MintTrust, type ReceiverLockedIntent, type SignedRequest} from './protocol'
 
 export type FundingReceipt = {
@@ -54,27 +53,9 @@ const noteUrlWithSignature = (withdrawLink: string, secretHex: string, amountMsa
   return signature ? withNewK1(basic, secretHex, amountMsat, signature) : basic
 }
 
-// One mutation on the wire, per attempt, always.
-//
-// lnurlcash-kit re-sends a mutation once by default when the answer is lost,
-// and LUD-25 is on its side: a SERVICE MUST replay a retried mutation rather
-// than refuse it, so against a compliant mint the second send is free and the
-// holder gets a definite answer instead of an ambiguous one.
-//
-// This lab opts out anyway, because it is the one place that assumes nothing
-// about the mint. A mint that does not honour the replay rule - which is the
-// mint this lab exists to survive - can read a re-send as a second request,
-// and the payer cannot tell the difference from out here: the output secret
-// is deliberately the recipient's alone, so the payer has no way to probe
-// what landed. The published boundary is that an ambiguous mutation is
-// reported as ambiguous and left for the recipient to resolve, and a silent
-// retry underneath would make that claim false.
-const NO_RETRY = {mutationRetries: 0} as const
-
 export const fundReceiverLockedRequest = async (
   request: SignedRequest,
-  noteInput: string,
-  options: LnurlcashOptions = {}
+  noteInput: string
 ): Promise<FundingReceipt> => {
   const noteUrl = resolveNoteInput(noteInput)
   if (!noteUrl) throw new Error('That is not an LNURLcash bearer note.')
@@ -90,7 +71,7 @@ export const fundReceiverLockedRequest = async (
   }
   const k1 = noteK1(noteUrl)
   if (!k1) throw new Error('The note has no spend secret.')
-  const info = await fetchNoteInfo(noteUrl, options)
+  const info = await fetchNoteInfo(noteUrl)
   assertCallbackAtMint(info.callback, request.intent.mint.host)
   if (request.intent.mint.mintPubkey && info.mintPubkey !== request.intent.mint.mintPubkey) {
     throw new Error('The request and live note disagree about the mint signing key.')
@@ -100,7 +81,7 @@ export const fundReceiverLockedRequest = async (
     throw new Error(`Use an exact ${request.intent.amount} sat note. The pasted note is worth ${info.maxWithdrawable / 1000} sat.`)
   }
   try {
-    const result = await rotateNoteWithHash(info.callback, k1, request.intent.outputHash, {...options, ...NO_RETRY})
+    const result = await rotateNoteWithHash(info.callback, k1, request.intent.outputHash)
     return {
       requestEventId: request.event.id,
       contractId: contractIdOf(request.intent),
@@ -112,7 +93,7 @@ export const fundReceiverLockedRequest = async (
       createdAt: Date.now()
     }
   } catch (error) {
-    if (error instanceof RequestRefusedError) throw error
+    if (!(error instanceof AmbiguousMintError)) throw error
     // The mutating GET may have landed even when its response did not. The
     // payer cannot probe the output because deliberately only the receiver
     // knows its secret. Never call this a failure and never retry with a
@@ -132,8 +113,7 @@ export const fundReceiverLockedRequest = async (
 export const receiveLockedPayment = async (
   request: SignedRequest,
   receiverSecretHex: string,
-  receipt?: FundingReceipt,
-  options: LnurlcashOptions = {}
+  receipt?: FundingReceipt
 ): Promise<ReceivedNote> => {
   if (hashK1(receiverSecretHex) !== request.intent.outputHash) throw new Error('The stored receiver secret does not belong to this request.')
   const expected = amountMsatOf(request.intent)
@@ -147,7 +127,7 @@ export const receiveLockedPayment = async (
     throw new Error('The funding receipt belongs to another request.')
   }
   const candidate = noteUrlWithSignature(request.intent.mint.withdrawLink, receiverSecretHex, expected, receipt?.signature)
-  const info = await fetchNoteInfo(candidate, options)
+  const info = await fetchNoteInfo(candidate)
   assertCallbackAtMint(info.callback, request.intent.mint.host)
   if (info.maxWithdrawable !== expected) throw new Error(`The mint reports ${info.maxWithdrawable} msat, not the requested ${expected} msat.`)
   if (request.intent.mint.mintPubkey && info.mintPubkey !== request.intent.mint.mintPubkey) {
@@ -170,14 +150,13 @@ export const receiveLockedPayment = async (
 export const redirectHeldNoteToHash = async (
   held: ReceivedNote,
   receiverSecretHex: string,
-  beneficiaryOutputHash: string,
-  options: LnurlcashOptions = {}
+  beneficiaryOutputHash: string
 ): Promise<SettlementReceipt> => {
   const heldHost = new URL(held.noteUrl).host
   assertCallbackAtMint(held.callback, heldHost)
   if (!/^[0-9a-f]{64}$/u.test(beneficiaryOutputHash)) throw new Error('The beneficiary output hash is malformed.')
   try {
-    const result = await rotateNoteWithHash(held.callback, receiverSecretHex, beneficiaryOutputHash, {...options, ...NO_RETRY})
+    const result = await rotateNoteWithHash(held.callback, receiverSecretHex, beneficiaryOutputHash)
     return {
       amountMsat: held.amountMsat,
       mintHost: heldHost,
@@ -187,7 +166,7 @@ export const redirectHeldNoteToHash = async (
       createdAt: Date.now()
     }
   } catch (error) {
-    if (error instanceof RequestRefusedError) throw error
+    if (!(error instanceof AmbiguousMintError)) throw error
     return {
       amountMsat: held.amountMsat,
       mintHost: heldHost,
@@ -202,8 +181,7 @@ export const receiveRedirectedPayout = async (
   mint: MintTrust,
   amountMsat: number,
   beneficiarySecretHex: string,
-  receipt?: SettlementReceipt,
-  options: LnurlcashOptions = {}
+  receipt?: SettlementReceipt
 ): Promise<ReceivedNote> => {
   const outputHash = hashK1(beneficiarySecretHex)
   if (receipt && (
@@ -212,7 +190,7 @@ export const receiveRedirectedPayout = async (
     receipt.mintHost !== mint.host
   )) throw new Error('The settlement receipt belongs to another payout target.')
   const nextUrl = noteUrlWithSignature(mint.withdrawLink, beneficiarySecretHex, amountMsat, receipt?.signature)
-  const info = await fetchNoteInfo(nextUrl, options)
+  const info = await fetchNoteInfo(nextUrl)
   assertCallbackAtMint(info.callback, mint.host)
   if (info.maxWithdrawable !== amountMsat) throw new Error('The settlement output has the wrong value.')
   if (mint.mintPubkey && info.mintPubkey !== mint.mintPubkey) throw new Error('The settlement output changed mint signing key.')

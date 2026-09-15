@@ -1,4 +1,4 @@
-import {noteK1} from 'lnurlcash-kit'
+import {noteK1} from '@lnurlcash/kit'
 import type {ReceivedNote, SettlementReceipt} from './cash'
 import {
   assertArbiterDecision,

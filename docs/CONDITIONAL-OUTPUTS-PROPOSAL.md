@@ -13,7 +13,7 @@ refund branch. Everything below argues why, using a working implementation as th
 
 ## Relationship to the existing scorecard
 
-`vectors/threat-suite.json` in [`lnurlcash-conformance`](https://github.com/TheCryptoDonkey/lnurlcash-conformance)
+`vectors/threat-suite.json` in [`lnurlcash-conformance`](https://github.com/lnurlcash/lnurlcash-conformance)
 already scores candidate options against fixed attacks. Two entries there matter here.
 
 Option G, *locked notes*, proposes that redemption require an LUD-04 signature from a linkingKey
