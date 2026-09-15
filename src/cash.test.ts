@@ -1,11 +1,11 @@
 import {describe, expect, it} from 'vitest'
-import {hashK1, RequestRefusedError} from 'lnurlcash-kit'
+import {configureTransport, hashK1} from '@lnurlcash/kit'
 import {fundReceiverLockedRequest, receiveLockedPayment, receiveRedirectedPayout, redirectHeldNoteToHash} from './cash'
 import {createIdentity, outputHashOf, randomSecretHex, signRequest, type DirectPaymentIntent} from './protocol'
 
 // LUD-25 made offline verification mandatory on 2026-09-02: a SERVICE MUST
 // publish the key its notes verify against on every withdrawRequest, and
-// lnurlcash-kit refuses a response without one. A stand-in mint publishes it
+// @lnurlcash/kit refuses a response without one. A stand-in mint publishes it
 // too, or it is standing in for a mint no wallet will talk to.
 const MINT_PUBKEY = '02' + 'cd'.repeat(32)
 // LUD-25 also requires a signature over every note a rotate, split or merge
@@ -18,6 +18,10 @@ const json = (body: unknown): Response => new Response(JSON.stringify(body), {
   status: 200,
   headers: {'content-type': 'application/json'}
 })
+
+const useTransport = (mock: (input: RequestInfo | URL) => Promise<Response>): void => {
+  configureTransport(url => mock(url))
+}
 
 const makeRequest = (receiverSecret: string) => {
   const signer = createIdentity()
@@ -46,13 +50,12 @@ describe('real-value receiver locking', () => {
     const fetch = async (input: RequestInfo | URL): Promise<Response> => {
       const url = new URL(String(input))
       if (url.pathname === '/w') {
-        const k1 = url.searchParams.get('k1')
-        if (k1 !== inputSecret && k1 !== receiverSecret) return json({status: 'ERROR', reason: 'Unknown note.'})
+        const h = url.searchParams.get('h')
+        if (h !== hashK1(inputSecret) && h !== hashK1(receiverSecret)) return json({status: 'ERROR', reason: 'Unknown note.'})
         return json({
           tag: 'withdrawRequest',
           callback: 'https://mint.test/w/cb',
           mintPubkey: MINT_PUBKEY,
-          k1,
           minWithdrawable: 21_000,
           maxWithdrawable: 21_000,
           defaultDescription: 'test note'
@@ -67,10 +70,11 @@ describe('real-value receiver locking', () => {
       throw new Error(`Unexpected URL ${url}`)
     }
     const note = `https://mint.test/w?k1=${inputSecret}&amount=21000`
-    const receipt = await fundReceiverLockedRequest(request, note, {fetch})
+    useTransport(fetch)
+    const receipt = await fundReceiverLockedRequest(request, note)
     expect(mutationSeen).toBe(true)
     expect(receipt.outcome).toBe('confirmed')
-    const received = await receiveLockedPayment(request, receiverSecret, receipt, {fetch})
+    const received = await receiveLockedPayment(request, receiverSecret, receipt)
     expect(received.amountMsat).toBe(21_000)
     expect(received.noteUrl).toContain(`k1=${receiverSecret}`)
   })
@@ -87,13 +91,13 @@ describe('real-value receiver locking', () => {
         tag: 'withdrawRequest',
         callback: 'https://mint.test/w/cb',
         mintPubkey: MINT_PUBKEY,
-        k1: inputSecret,
         minWithdrawable: 42_000,
         maxWithdrawable: 42_000,
         defaultDescription: 'test note'
       })
     }
-    await expect(fundReceiverLockedRequest(request, `https://mint.test/w?k1=${inputSecret}`, {fetch})).rejects.toThrow('exact 21 sat note')
+    useTransport(fetch)
+    await expect(fundReceiverLockedRequest(request, `https://mint.test/w?k1=${inputSecret}`)).rejects.toThrow('exact 21 sat note')
     expect(mutations).toBe(0)
   })
 
@@ -108,13 +112,13 @@ describe('real-value receiver locking', () => {
         tag: 'withdrawRequest',
         callback: 'https://mint.test/w/cb',
         mintPubkey: MINT_PUBKEY,
-        k1: inputSecret,
         minWithdrawable: 21_000,
         maxWithdrawable: 21_000,
         defaultDescription: 'test note'
       })
     }
-    const receipt = await fundReceiverLockedRequest(request, `https://mint.test/w?k1=${inputSecret}`, {fetch})
+    useTransport(fetch)
+    const receipt = await fundReceiverLockedRequest(request, `https://mint.test/w?k1=${inputSecret}`)
     expect(receipt.outcome).toBe('receiver_must_probe')
   })
 
@@ -125,8 +129,7 @@ describe('real-value receiver locking', () => {
     request.intent.mint.withdrawLink = 'https://mint.test/other-wallet'
     await expect(fundReceiverLockedRequest(
       request,
-      `https://mint.test/w?k1=${inputSecret}`,
-      {fetch: async () => { throw new Error('network must not be reached') }}
+      `https://mint.test/w?k1=${inputSecret}`
     )).rejects.toThrow('different withdraw endpoint')
   })
 
@@ -141,13 +144,13 @@ describe('real-value receiver locking', () => {
         tag: 'withdrawRequest',
         callback: 'https://evil.test/cb',
         mintPubkey: MINT_PUBKEY,
-        k1: inputSecret,
         minWithdrawable: 21_000,
         maxWithdrawable: 21_000,
         defaultDescription: 'host swap'
       })
     }
-    await expect(fundReceiverLockedRequest(request, `https://mint.test/w?k1=${inputSecret}`, {fetch})).rejects.toThrow('another host')
+    useTransport(fetch)
+    await expect(fundReceiverLockedRequest(request, `https://mint.test/w?k1=${inputSecret}`)).rejects.toThrow('another host')
     expect(evilRequests).toBe(0)
   })
 
@@ -156,11 +159,12 @@ describe('real-value receiver locking', () => {
     const request = makeRequest('bb'.repeat(32))
     const fetch = async (): Promise<Response> => {
       return json({
-        tag: 'withdrawRequest', callback: 'http://mint.test/w/cb', mintPubkey: MINT_PUBKEY, k1: inputSecret,
+        tag: 'withdrawRequest', callback: 'http://mint.test/w/cb', mintPubkey: MINT_PUBKEY,
         minWithdrawable: 21_000, maxWithdrawable: 21_000, defaultDescription: 'test note'
       })
     }
-    await expect(fundReceiverLockedRequest(request, `https://mint.test/w?k1=${inputSecret}`, {fetch})).rejects.toBeInstanceOf(RequestRefusedError)
+    useTransport(fetch)
+    await expect(fundReceiverLockedRequest(request, `https://mint.test/w?k1=${inputSecret}`)).rejects.toThrow('not an allowed https/http address')
   })
 
   it('redirects a held note to a beneficiary hash without learning its secret', async () => {
@@ -181,7 +185,8 @@ describe('real-value receiver locking', () => {
       expect(String(input)).not.toContain(beneficiarySecret)
       return json({status: 'OK', sig: MUTATION_SIG})
     }
-    const receipt = await redirectHeldNoteToHash(held, heldSecret, beneficiaryHash, {fetch})
+    useTransport(fetch)
+    const receipt = await redirectHeldNoteToHash(held, heldSecret, beneficiaryHash)
     expect(receipt).toMatchObject({outputHash: beneficiaryHash, outcome: 'confirmed', amountMsat: 21_000})
   })
 
@@ -193,23 +198,23 @@ describe('real-value receiver locking', () => {
       noteUrl: `https://mint.test/w?k1=${heldSecret}&amount=21000`, amountMsat: 21_000,
       callback: 'https://mint.test/w/cb', signatureVerified: null
     }
-    const ambiguous = await redirectHeldNoteToHash(held, heldSecret, beneficiaryHash, {
-      fetch: async () => { throw new TypeError('response lost') }
-    })
+    useTransport(async () => { throw new TypeError('response lost') })
+    const ambiguous = await redirectHeldNoteToHash(held, heldSecret, beneficiaryHash)
     expect(ambiguous.outcome).toBe('beneficiary_must_probe')
+    useTransport(async input => {
+      const url = new URL(String(input))
+      expect(url.searchParams.get('h')).toBe(hashK1(beneficiarySecret))
+      expect(url.searchParams.has('k1')).toBe(false)
+      return json({
+        tag: 'withdrawRequest', callback: 'https://mint.test/w/cb', mintPubkey: MINT_PUBKEY,
+        minWithdrawable: 21_000, maxWithdrawable: 21_000, defaultDescription: 'settled'
+      })
+    })
     const payout = await receiveRedirectedPayout(
       {host: 'mint.test', withdrawLink: 'https://mint.test/w'},
       21_000,
       beneficiarySecret,
-      ambiguous,
-      {fetch: async input => {
-        const url = new URL(String(input))
-        expect(url.searchParams.get('k1')).toBe(beneficiarySecret)
-        return json({
-          tag: 'withdrawRequest', callback: 'https://mint.test/w/cb', mintPubkey: MINT_PUBKEY, k1: beneficiarySecret,
-          minWithdrawable: 21_000, maxWithdrawable: 21_000, defaultDescription: 'settled'
-        })
-      }}
+      ambiguous
     )
     expect(payout.noteUrl).toContain(`k1=${beneficiarySecret}`)
   })
